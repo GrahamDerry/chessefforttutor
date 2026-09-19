@@ -22,6 +22,7 @@ import multiprocessing as mp
 import sqlite3
 import time
 import traceback
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -203,13 +204,34 @@ def reshallow(con: sqlite3.Connection, *, engine: Engine | None = None, log: Log
     finally:
         if own_engine:
             engine.close()
+    relabel(con, log=log)
+    log(f"[reshallow] rows={len(rows)} changed={changed} at shallow depth {engine.shallow_depth}")
+    return changed
+
+
+def relabel(con: sqlite3.Connection, log: Log = print) -> int:
+    """Re-derive `obvious` and `label` from what is already stored. Returns labels changed.
+
+    No engine and no deep search: this only replays the §2 rules over existing
+    criticality / shallow-move / commitment values. Run it after changing CRIT, CALM,
+    FORK or OBVIOUS_VETO_MAX_CRIT. Changing SHALLOW_DEPTH needs `analyze --reshallow`
+    instead, because the shallow move itself has to be searched again.
+    """
     con.execute("""UPDATE positions SET obvious = (SELECT a.best_move = a.shallow_best_move
                                                      FROM analysis a WHERE a.id = positions.analysis_id)
                     WHERE analysis_id IS NOT NULL""")
-    for p in con.execute("SELECT id, criticality, obvious, commitment FROM positions "
-                         "WHERE analysis_id IS NOT NULL AND criticality IS NOT NULL").fetchall():
-        con.execute("UPDATE positions SET label = ? WHERE id = ?",
-                    (label(p["criticality"], bool(p["obvious"]), is_fork(p["commitment"])), p["id"]))
+    rows = con.execute("SELECT id, criticality, obvious, commitment, label FROM positions "
+                       "WHERE analysis_id IS NOT NULL AND criticality IS NOT NULL").fetchall()
+    changed = Counter()
+    for p in rows:
+        new = label(p["criticality"], bool(p["obvious"]), is_fork(p["commitment"]))
+        if new != p["label"]:
+            changed[f"{p['label']}->{new}"] += 1
+            con.execute("UPDATE positions SET label = ? WHERE id = ?", (new, p["id"]))
     con.commit()
-    log(f"[reshallow] rows={len(rows)} changed={changed} at shallow depth {engine.shallow_depth}")
-    return changed
+    total = sum(changed.values())
+    moves = ", ".join(f"{k} {v}" for k, v in sorted(changed.items(), key=lambda kv: -kv[1]))
+    log(f"[relabel] {total}/{len(rows)} labels changed"
+        f" (CRIT={config.CRIT} CALM={config.CALM} OBVIOUS_VETO_MAX_CRIT={config.OBVIOUS_VETO_MAX_CRIT})"
+        + (f": {moves}" if moves else ""))
+    return total

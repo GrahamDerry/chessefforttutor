@@ -80,9 +80,16 @@ def stockfish_path() -> str:
 E_SCALE = 0.00368                         # E(cp) = 1 / (1 + exp(-E_SCALE * cp))
 
 # --------------------------------------------------------------------------- labels (§2)
-CRIT = 0.10                               # LONG if C >= CRIT and not obvious
+CRIT = 0.10                               # LONG if C >= CRIT (and obvious does not veto)
 CALM = 0.03                               # SHORT if C <= CALM (and no fork)
 FORK = 0.08                               # fork if commitment >= FORK
+# `obvious` forces SHORT only below this criticality. At 1.0 it is an unconditional veto
+# (the pre-2026-09-20 rule). At CRIT, a position sharp enough to be LONG stays LONG even
+# when a shallow probe happens to find the move. Measured on 52 games: the unconditional
+# veto swallowed 79% of positions with C >= CRIT, including 47 the user blundered, while
+# still predicting real skill (76% vs 36% best-move rate at equal C) -- so gate it, don't
+# drop it. See tools/tune_sweep.py.
+OBVIOUS_VETO_MAX_CRIT = CRIT
 NEAR_EQUAL_E = 0.03                       # candidates within this E of best are "near-equal"
 FORK_PV_PLIES = 6                         # follow each candidate's PV this far
 

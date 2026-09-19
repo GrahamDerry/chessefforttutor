@@ -61,10 +61,21 @@ fork       = commitment ≥ FORK (default 0.08)
 **Ground truth label** (depends only on the position):
 
 ```
-LONG   if (C ≥ CRIT and not obvious) or fork          # CRIT default 0.10
-SHORT  if (C ≤ CALM and not fork) or (obvious and not fork)   # CALM default 0.03
+vetoed = obvious and C < OBVIOUS_VETO_MAX_CRIT        # default OBVIOUS_VETO_MAX_CRIT = CRIT
+
+LONG   if (C ≥ CRIT and not vetoed) or fork           # CRIT default 0.10
+SHORT  if (C ≤ CALM and not fork) or (vetoed and not fork)    # CALM default 0.03
 GRAY   otherwise → never shown in the drill
 ```
+
+`obvious` only silences a position while it is below `OBVIOUS_VETO_MAX_CRIT`. Setting that
+to 1.0 restores the original unconditional veto. It is gated because a depth-4 probe
+finding the move does not mean *this* player would: measured over 52 games, the
+unconditional form swallowed 79% of positions with C ≥ CRIT, including 47 the user
+actually blundered, even though those positions still carry a 14% blunder rate. The flag
+is kept rather than dropped because it does predict accuracy — at equal C, positions
+flagged obvious are played correctly 76% of the time against 36% for the rest.
+Re-derive labels after changing any of these with `python -m pipeline relabel`.
 
 **Time** (clock tags are `[%clk H:MM:SS(.t)]`, remaining time *after* the move):
 

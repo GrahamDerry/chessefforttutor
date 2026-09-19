@@ -54,10 +54,19 @@ def criticality(candidates: Sequence[Mapping]) -> float:
 
 
 def label(crit: float, obvious: bool, fork: bool = False) -> str:
-    """Ground-truth label from the position alone (SPEC.md §2)."""
+    """Ground-truth label from the position alone (SPEC.md §2).
+
+    `obvious` means a shallow probe already found the deep search's move, so fast
+    intuition would have done. It forces SHORT, but only below
+    OBVIOUS_VETO_MAX_CRIT: a position sharp enough to clear CRIT still deserves
+    thought even when the probe got lucky. Set OBVIOUS_VETO_MAX_CRIT = 1.0 for the
+    old unconditional veto.
+    """
     if fork:
         return "LONG"
-    if obvious or crit <= config.CALM:
+    if obvious and crit < config.OBVIOUS_VETO_MAX_CRIT:
+        return "SHORT"
+    if crit <= config.CALM:
         return "SHORT"
     if crit >= config.CRIT:
         return "LONG"
