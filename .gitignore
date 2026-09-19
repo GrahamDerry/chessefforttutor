@@ -5,3 +5,4 @@ data/tutor.db
 data/*.db-journal
 .DS_Store
 data/fake.db
+data/*.log
