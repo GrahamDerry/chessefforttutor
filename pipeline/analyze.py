@@ -11,14 +11,17 @@ Per position (all from the mover's point of view, SPEC.md §2):
 User-to-move plies get the full MultiPV search. Opponent plies only exist to provide the
 next-ply E, so they get OPPONENT_MULTIPV lines and no criticality/label (NULL).
 
-Commit once per game so a crash loses at most one game. `--workers N` runs N engine
-processes on disjoint games; SQLite serialises the writes.
+Cached `analysis` rows are committed as soon as they are searched; a game's scores are
+committed once at the end, so a crash loses at most one game of scoring and no engine
+work. `--workers N` runs N engine processes on disjoint games; because every write
+transaction is short, SQLite can serialise them without any worker hitting its busy timeout.
 """
 from __future__ import annotations
 
 import multiprocessing as mp
 import sqlite3
 import time
+import traceback
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -125,16 +128,24 @@ def _run_games(con: sqlite3.Connection, games: list, depth: int, engine: Engine,
     return done
 
 
+WORKER_BUSY_TIMEOUT_MS = 5 * 60 * 1000   # writes are now short; this only guards against stalls
+
+
 def _worker(args: tuple) -> int:
     """Entry point for one engine process: own connection, own engine, its share of games."""
     db_path, game_ids, depth, threads, idx = args
     con = db.connect(db_path)
-    con.execute("PRAGMA busy_timeout = 60000")
+    con.execute(f"PRAGMA busy_timeout = {WORKER_BUSY_TIMEOUT_MS}")
     rows = [con.execute("SELECT id, url, played_at FROM games WHERE id = ?", (gid,)).fetchone()
             for gid in game_ids]
     try:
         with Engine(threads=threads, hash_mb=max(64, config.HASH_MB // max(1, config.WORKERS))) as engine:
             return _run_games(con, rows, depth, engine, print, tag=f" w{idx}")
+    except Exception:
+        # Pool.map only re-raises after every worker has finished; without this a dead
+        # worker is invisible for hours while the others keep going.
+        print(f"[analyze w{idx}] FAILED:\n{traceback.format_exc()}", flush=True)
+        raise
     finally:
         con.close()
 
@@ -155,7 +166,7 @@ def analyze(con: sqlite3.Connection, *, depth: int = config.ANALYSIS_DEPTH, limi
         config.WORKERS = workers
         threads = max(1, config.THREADS // workers)
         shares = [[g["id"] for g in games[i::workers]] for i in range(workers)]
-        con.execute("PRAGMA busy_timeout = 60000")
+        con.execute(f"PRAGMA busy_timeout = {WORKER_BUSY_TIMEOUT_MS}")
         with mp.get_context("spawn").Pool(workers) as pool:
             counts = pool.map(_worker, [(db_path, share, depth, threads, i) for i, share in enumerate(shares)])
         log(f"[analyze] all workers done: games={sum(counts)}")

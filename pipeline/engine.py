@@ -127,7 +127,10 @@ class Engine:
 class AnalysisCache:
     """Read-through cache over the `analysis` table keyed by (fen_key, depth).
 
-    Writes are not committed here: the caller commits once per game.
+    Each write is committed immediately in its own short transaction. Cached analysis is
+    valid on its own, so nothing is lost by committing early, and it keeps the SQLite write
+    lock held for milliseconds rather than a whole game -- with `--workers N` a lock held
+    for a full game starves the other workers past their busy timeout.
     """
 
     def __init__(self, con: sqlite3.Connection):
@@ -162,6 +165,7 @@ class AnalysisCache:
         if len(json.loads(row["candidates_json"])) < len(res.candidates):
             self.con.execute("UPDATE analysis SET best_move = ?, shallow_best_move = ?, candidates_json = ? "
                              "WHERE id = ?", (res.best_move, res.shallow_best_move, res.candidates_json, res.id))
+        self.con.commit()
         self.mem[(res.fen_key, res.depth)] = res
         return res
 
@@ -169,6 +173,7 @@ class AnalysisCache:
         res.shallow_best_move = shallow_best_move
         self.con.execute("UPDATE analysis SET shallow_best_move = ? WHERE id = ?",
                          (shallow_best_move, res.id))
+        self.con.commit()
 
 
 def analyze_position(board: chess.Board, depth: int, engine: Engine, cache: AnalysisCache,

@@ -292,3 +292,22 @@ def test_lost_advantage_picks_biggest_drop_after_peak():
     assert truth == "LONG" and sev == 0.30 and notes["peak_ply"] == 2 and notes["peak_e"] == 0.8
     won = [dict(r, result_user=1.0) for r in g]
     assert not any(k == "lost_advantage" for _, k in desired_scenarios(won, log=lambda s: None))
+
+
+def test_analysis_cache_commits_immediately_so_workers_do_not_block(tmp_path):
+    """Regression: with --workers N, a cache write left uncommitted held the SQLite write
+    lock for a whole game and starved the other workers past their busy timeout."""
+    from pipeline import db
+    from pipeline.engine import AnalysisCache
+
+    path = tmp_path / "t.db"
+    a, b = db.connect(path), db.connect(path)
+    b.execute("PRAGMA busy_timeout = 200")   # fail fast instead of waiting on a held lock
+    cache_a = AnalysisCache(a)
+    cache_a.put(AnalysisResult(fen_key="k1", depth=18, best_move="e2e4", shallow_best_move="e2e4",
+                               candidates=[{"move": "e2e4", "e": 0.5}]))
+    # If put() had not committed, this write would raise "database is locked".
+    AnalysisCache(b).put(AnalysisResult(fen_key="k2", depth=18, best_move="d2d4", shallow_best_move="d2d4",
+                                        candidates=[{"move": "d2d4", "e": 0.5}]))
+    assert a.execute("SELECT COUNT(*) FROM analysis").fetchone()[0] == 2
+    a.close(); b.close()
