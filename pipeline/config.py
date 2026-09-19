@@ -102,7 +102,10 @@ PIECE_VALUES = {chess.QUEEN: 9, chess.ROOK: 5, chess.BISHOP: 3, chess.KNIGHT: 3}
 BLUNDER_E_LOSS = 0.20
 TOO_LITTLE_E_LOSS = 0.10
 TOO_LITTLE_PERCENTILE = 25                # of the user's seconds_spent, per time control
-TOO_MUCH_TIME_FRACTION = 0.10
+TOO_MUCH_TIME_FRACTION = 0.20                # retuned from 0.10 on 2026-09-20: at 0.10 this kind
+                                          # alone was 201 of 314 scenarios and is SHORT by
+                                          # construction, so always answering SHORT scored 74%
+                                          # without looking at the board (tools/smoke_app.py).
 LOST_ADVANTAGE_PEAK_E = 0.75
 LOST_ADVANTAGE_MAX_RESULT = 0.5
 CALM_PLY_BUCKET = 10

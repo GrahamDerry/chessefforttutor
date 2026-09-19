@@ -98,7 +98,7 @@ e_loss   = e_best − e_played
 |---|---|
 | `blunder` | user move with `e_loss ≥ 0.20` |
 | `too_little` | label LONG, `e_loss ≥ 0.10`, `seconds_spent` < user's 25th percentile for that time control |
-| `too_much` | label SHORT, `time_fraction ≥ 0.10` |
+| `too_much` | label SHORT, `time_fraction ≥ TOO_MUCH_TIME_FRACTION` (default 0.20) |
 | `lost_advantage` | user's E peaked ≥ 0.75, result ≤ 0.5; the user move with the largest E drop after the peak |
 | `fork` | `fork == true` |
 | `calm` | label SHORT, sampled to balance the drill (see §5) |
