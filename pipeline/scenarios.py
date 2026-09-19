@@ -43,7 +43,7 @@ def load_rows(con: sqlite3.Connection) -> list[sqlite3.Row]:
                   p.seconds_spent, p.time_fraction, p.clock_before, p.commitment,
                   g.base_seconds, g.increment, g.result_user
              FROM positions p JOIN games g ON g.id = p.game_id
-            WHERE p.label IS NOT NULL
+            WHERE p.e_best IS NOT NULL
             ORDER BY p.game_id, p.ply""").fetchall()
 
 
@@ -60,7 +60,7 @@ def desired_scenarios(rows: list[sqlite3.Row], log: Log = print) -> dict[Key, Va
     p_fast = {tc: percentile(v, config.TOO_LITTLE_PERCENTILE) for tc, v in by_tc.items()}
 
     for r in user_rows:
-        if r["label"] == "GRAY":
+        if r["label"] in (None, "GRAY"):
             continue
         truth, loss = r["label"], r["e_loss"]
         if loss is not None and loss >= config.BLUNDER_E_LOSS:
@@ -85,7 +85,7 @@ def desired_scenarios(rows: list[sqlite3.Row], log: Log = print) -> dict[Key, Va
         peak_i = max(range(len(g)), key=lambda i: e_user[i])
         if e_user[peak_i] < config.LOST_ADVANTAGE_PEAK_E:
             continue
-        cands = [r for r in g[peak_i:] if r["user_to_move"] and r["label"] != "GRAY"
+        cands = [r for r in g[peak_i:] if r["user_to_move"] and r["label"] not in (None, "GRAY")
                  and r["e_loss"] is not None and r["e_loss"] > 0]
         if not cands:
             continue
