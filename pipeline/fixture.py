@@ -10,6 +10,7 @@ from typing import Callable
 from pipeline import config, db
 from pipeline.analyze import analyze
 from pipeline.engine import Engine
+from pipeline.forks import run_forks
 from pipeline.ingest import ingest
 from pipeline.report import report
 from pipeline.scenarios import generate
@@ -28,6 +29,7 @@ def build_fixture(path: Path = config.FIXTURE_DB, *, games: int = config.FIXTURE
         ingest(con, months=config.DEFAULT_MONTHS, limit=games, newest_first=True, log=log)
         with Engine() as engine:
             analyze(con, depth=depth, engine=engine, log=log)
+            run_forks(con, depth=min(depth, config.FORK_DEPTH), engine=engine, log=log)
         generate(con, log=log)
         report(con, out=log)
     finally:

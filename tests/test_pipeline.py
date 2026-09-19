@@ -222,6 +222,33 @@ def test_score_positions_keeps_fork_label():
     assert score_positions([_pos(1, commitment=config.FORK - 0.01)], results, 0.5)[0]["label"] == "SHORT"
 
 
+# --------------------------------------------------------------------------- forks (pure parts)
+def test_fork_gate_and_irreversibility():
+    from pipeline.forks import (commitment_from_sharpness, is_irreversible, near_equal,
+                                opens_with_trade, passes_gate, user_decision_points)
+    b = chess.Board("r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3")
+    c = [{"move": "f1b5", "e": 0.518, "pv": ["f1b5", "g8f6"]},
+         {"move": "f1c4", "e": 0.509, "pv": ["f1c4", "g8f6"]},
+         {"move": "d2d4", "e": 0.509, "pv": ["d2d4", "e5d4", "f3d4"]},
+         {"move": "b1c3", "e": 0.470, "pv": ["b1c3"]}]
+    assert [x["move"] for x in near_equal(c)] == ["f1b5", "f1c4", "d2d4"]   # b1c3 is 0.048 away
+    assert not is_irreversible(b, c[0]) and not is_irreversible(b, c[1])
+    assert is_irreversible(b, c[2])                                          # pawn move
+    assert [x["move"] for x in passes_gate(b, 0.01, c)] == ["f1b5", "f1c4", "d2d4"]
+    assert passes_gate(b, config.CALM + 0.001, c) == []                      # too critical
+    assert passes_gate(b, 0.0, c[:2]) == []                                  # nothing irreversible
+    # trade: Nxe5 Nxe5 recaptures on the same square
+    t = chess.Board("r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3")
+    assert opens_with_trade(t, ["f3e5", "c6e5"])
+    assert not opens_with_trade(t, ["f3e5", "g8f6"])
+    # decision points: after 2, 4, 6 plies; stops at PV end
+    pts = user_decision_points(b, ["f1b5", "g8f6", "e1g1", "f8c5", "b1c3", "d7d6", "d2d3"])
+    assert len(pts) == 3 and all(p.turn == chess.WHITE for p in pts)
+    assert len(user_decision_points(b, ["f1b5", "g8f6", "e1g1"])) == 1
+    assert commitment_from_sharpness([0.02, 0.11, 0.05]) == pytest.approx(0.09)
+    assert commitment_from_sharpness([0.02]) is None
+
+
 # --------------------------------------------------------------------------- scenarios
 def _row(**kw):
     base = dict(id=0, game_id=1, ply=30, user_to_move=1, label="SHORT", e_best=0.5, e_played=0.5,

@@ -36,7 +36,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--reshallow", action="store_true",
                    help="only refresh shallow_best_move/obvious/label at the current SHALLOW_DEPTH")
 
-    sub.add_parser("forks", help="commitment / fork pass (A3)")
+    s = sub.add_parser("forks", help="commitment / fork pass (A3) on calm near-equal positions")
+    s.add_argument("--depth", type=int, default=config.FORK_DEPTH, metavar="D")
+    s.add_argument("--limit", type=int, metavar="N")
+    s.add_argument("--recompute", action="store_true", help="revisit positions that already have a commitment")
     sub.add_parser("scenarios", help="regenerate the scenarios table")
     sub.add_parser("report", help="print the tuning report")
 
@@ -52,14 +55,12 @@ def main(argv: list[str] | None = None) -> int:
         build_fixture(args.out, games=args.games, depth=args.depth)
         return 0
 
-    if args.cmd == "forks":
-        print("forks: not implemented yet (A3). Positions keep the labels from `analyze`.",
-              file=sys.stderr)
-        return 2
-
     con = db.connect()
     try:
-        if args.cmd == "ingest":
+        if args.cmd == "forks":
+            from pipeline.forks import run_forks
+            run_forks(con, depth=args.depth, recompute=args.recompute, limit=args.limit)
+        elif args.cmd == "ingest":
             from pipeline.ingest import ingest
             ingest(con, since=args.since, months=args.months, limit=args.limit)
         elif args.cmd == "analyze":
