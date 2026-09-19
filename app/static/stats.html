@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stats · Chess Effort Tutor</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Chess Effort Tutor</h1>
+  <nav><a href="/">Drill</a><a href="/stats" class="on">Stats</a></nav>
+</header>
+<main id="root"><p class="empty">Loading…</p></main>
+<script type="module">
+const root = document.getElementById('root');
+const pct = x => x == null ? '—' : (x * 100).toFixed(0) + '%';
+
+function table(title, obj) {
+  const keys = Object.keys(obj || {});
+  if (!keys.length) return '';
+  const rows = keys.map(k => {
+    const { n, accuracy } = obj[k];
+    return `<tr><td>${k}</td><td class="num">${n}</td>
+      <td><div class="bar"><i style="width:${(accuracy * 100).toFixed(0)}%"></i></div></td>
+      <td class="num">${pct(accuracy)}</td></tr>`;
+  }).join('');
+  return `<h3>${title}</h3><table>
+    <tr><th>Group</th><th class="num">Attempts</th><th></th><th class="num">Accuracy</th></tr>
+    ${rows}</table>`;
+}
+
+const s = await (await fetch('/api/stats')).json();
+if (!s.attempts) {
+  root.innerHTML = `<p class="empty">No attempts yet — go <a href="/">drill some positions</a>.
+    Pool: ${JSON.stringify(s.pool)}</p>`;
+} else {
+  const last20 = s.recent.slice(0, 20);
+  const trend = last20.length
+    ? last20.filter(r => r.correct).length / last20.length : null;
+  root.innerHTML = `
+    <h3>Overall</h3>
+    <div class="big">${pct(s.accuracy)}</div>
+    <p class="empty">${s.attempts} attempts · last 20: ${pct(trend)}</p>
+    ${table('By scenario kind', s.accuracy_by_kind)}
+    ${table('By phase', s.accuracy_by_phase)}
+    ${table('By correct answer', s.accuracy_by_truth)}
+    <h3>Recent</h3>
+    <table><tr><th>When</th><th>Kind</th><th>Answered</th><th>Correct</th><th class="num">ms</th></tr>
+    ${s.recent.slice(0, 25).map(r => `<tr>
+      <td>${new Date(r.answered_at).toLocaleTimeString()}</td>
+      <td>${r.kind}</td><td>${r.answer}</td>
+      <td>${r.correct ? '✓' : '✗'}</td>
+      <td class="num">${r.response_ms ?? '—'}</td></tr>`).join('')}
+    </table>`;
+}
+</script>
+</body>
+</html>
