@@ -67,16 +67,27 @@ def test_criticality_from_candidates_json():
 @pytest.mark.parametrize("crit,obvious,fork,expected", [
     (config.CRIT, False, False, "LONG"),
     (config.CRIT + 0.2, False, False, "LONG"),
-    (config.CRIT + 0.2, True, False, "SHORT"),          # obvious beats criticality
+    (config.CRIT, True, False, "LONG"),                 # obvious no longer vetoes at CRIT
+    (config.CRIT + 0.2, True, False, "LONG"),
     (config.CALM, False, False, "SHORT"),
     (0.0, False, False, "SHORT"),
     ((config.CALM + config.CRIT) / 2, False, False, "GRAY"),
-    ((config.CALM + config.CRIT) / 2, True, False, "SHORT"),
+    ((config.CALM + config.CRIT) / 2, True, False, "SHORT"),   # still vetoes below CRIT
     (0.0, True, True, "LONG"),                          # fork always LONG
     (config.CALM, False, True, "LONG"),
 ])
 def test_label_truth_table(crit, obvious, fork, expected):
     assert label(crit, obvious, fork) == expected
+
+
+def test_obvious_veto_is_tunable_back_to_unconditional(monkeypatch):
+    """OBVIOUS_VETO_MAX_CRIT = 1.0 restores the pre-2026-09-20 rule, where a shallow
+    probe finding the move forced SHORT however sharp the position was."""
+    sharp = config.CRIT + 0.2
+    assert label(sharp, True, False) == "LONG"
+    monkeypatch.setattr(config, "OBVIOUS_VETO_MAX_CRIT", 1.0)
+    assert label(sharp, True, False) == "SHORT"
+    assert label(sharp, True, True) == "LONG"           # a fork still outranks the veto
 
 
 # --------------------------------------------------------------------------- fen_key
@@ -196,7 +207,7 @@ def test_score_positions_flips_perspective_for_e_played():
     assert rows[0]["e_played"] == pytest.approx(0.45)
     assert rows[0]["e_loss"] == pytest.approx(0.15)
     assert rows[0]["criticality"] == pytest.approx(0.20)
-    assert rows[0]["obvious"] == 1 and rows[0]["label"] == "SHORT"       # obvious -> SHORT
+    assert rows[0]["obvious"] == 1 and rows[0]["label"] == "LONG"        # obvious, but C=0.20 >= CRIT
     assert rows[1]["e_played"] == pytest.approx(0.70)
     assert rows[1]["e_loss"] == 0.0                                       # gains are clamped
     assert rows[1]["obvious"] == 0 and rows[1]["label"] == "SHORT"       # C = 0.005 <= CALM

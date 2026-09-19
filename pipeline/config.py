@@ -80,9 +80,16 @@ def stockfish_path() -> str:
 E_SCALE = 0.00368                         # E(cp) = 1 / (1 + exp(-E_SCALE * cp))
 
 # --------------------------------------------------------------------------- labels (§2)
-CRIT = 0.10                               # LONG if C >= CRIT and not obvious
+CRIT = 0.10                               # LONG if C >= CRIT (and obvious does not veto)
 CALM = 0.03                               # SHORT if C <= CALM (and no fork)
 FORK = 0.08                               # fork if commitment >= FORK
+# `obvious` forces SHORT only below this criticality. At 1.0 it is an unconditional veto
+# (the pre-2026-09-20 rule). At CRIT, a position sharp enough to be LONG stays LONG even
+# when a shallow probe happens to find the move. Measured on 52 games: the unconditional
+# veto swallowed 79% of positions with C >= CRIT, including 47 the user blundered, while
+# still predicting real skill (76% vs 36% best-move rate at equal C) -- so gate it, don't
+# drop it. See tools/tune_sweep.py.
+OBVIOUS_VETO_MAX_CRIT = CRIT
 NEAR_EQUAL_E = 0.03                       # candidates within this E of best are "near-equal"
 FORK_PV_PLIES = 6                         # follow each candidate's PV this far
 
@@ -95,7 +102,10 @@ PIECE_VALUES = {chess.QUEEN: 9, chess.ROOK: 5, chess.BISHOP: 3, chess.KNIGHT: 3}
 BLUNDER_E_LOSS = 0.20
 TOO_LITTLE_E_LOSS = 0.10
 TOO_LITTLE_PERCENTILE = 25                # of the user's seconds_spent, per time control
-TOO_MUCH_TIME_FRACTION = 0.10
+TOO_MUCH_TIME_FRACTION = 0.20                # retuned from 0.10 on 2026-09-20: at 0.10 this kind
+                                          # alone was 201 of 314 scenarios and is SHORT by
+                                          # construction, so always answering SHORT scored 74%
+                                          # without looking at the board (tools/smoke_app.py).
 LOST_ADVANTAGE_PEAK_E = 0.75
 LOST_ADVANTAGE_MAX_RESULT = 0.5
 CALM_PLY_BUCKET = 10

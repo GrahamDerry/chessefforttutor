@@ -40,6 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--depth", type=int, default=config.FORK_DEPTH, metavar="D")
     s.add_argument("--limit", type=int, metavar="N")
     s.add_argument("--recompute", action="store_true", help="revisit positions that already have a commitment")
+    sub.add_parser("relabel", help="re-derive obvious/label after a threshold change (no engine)")
     sub.add_parser("scenarios", help="regenerate the scenarios table")
     sub.add_parser("report", help="print the tuning report")
 
@@ -69,6 +70,9 @@ def main(argv: list[str] | None = None) -> int:
                 reshallow(con)
             else:
                 analyze(con, depth=args.depth, limit=args.limit, workers=args.workers)
+        elif args.cmd == "relabel":
+            from pipeline.analyze import relabel
+            relabel(con)
         elif args.cmd == "scenarios":
             from pipeline.scenarios import generate
             generate(con)

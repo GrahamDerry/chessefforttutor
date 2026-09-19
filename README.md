@@ -18,6 +18,7 @@ python -m pipeline ingest --months 6            # Chess.com archives -> games/po
 python -m pipeline analyze --workers 3          # Stockfish, depth 18, commit per game, resumable
 python -m pipeline scenarios                    # regenerate scenarios (keeps ids with attempts)
 python -m pipeline report                       # the tuning report
+python -m pipeline relabel                      # after changing CRIT/CALM/FORK/OBVIOUS_VETO_MAX_CRIT (no engine)
 python -m pipeline analyze --reshallow          # after changing SHALLOW_DEPTH: refresh obvious/labels only
 ```
 
