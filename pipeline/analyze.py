@@ -8,10 +8,15 @@ Per position (all from the mover's point of view, SPEC.md §2):
     obvious     = shallow best == deep best
     label       = LONG / SHORT / GRAY            # fork kept if the commitment pass already ran
 
-Commit once per game so a crash loses at most one game.
+User-to-move plies get the full MultiPV search. Opponent plies only exist to provide the
+next-ply E, so they get OPPONENT_MULTIPV lines and no criticality/label (NULL).
+
+Commit once per game so a crash loses at most one game. `--workers N` runs N engine
+processes on disjoint games; SQLite serialises the writes.
 """
 from __future__ import annotations
 
+import multiprocessing as mp
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -19,7 +24,7 @@ from typing import Callable
 
 import chess
 
-from pipeline import config
+from pipeline import config, db
 from pipeline.engine import AnalysisCache, AnalysisResult, Engine, analyze_position
 from pipeline.metrics import is_fork, label
 
@@ -31,16 +36,22 @@ def terminal_e_best(board: chess.Board) -> float:
     return 0.0 if board.is_checkmate() else 0.5
 
 
-def score_positions(positions: list[sqlite3.Row], results: list[AnalysisResult],
+def score_positions(positions: list, results: list[AnalysisResult],
                     e_best_after_last: float) -> list[dict]:
-    """Pure scoring step. `positions` and `results` are aligned and ordered by ply."""
+    """Pure scoring step. `positions` and `results` are aligned and ordered by ply.
+
+    Rows whose analysis has fewer lines than the position needs (opponent plies searched
+    with OPPONENT_MULTIPV) get NULL criticality/label: they are never drilled.
+    """
     out: list[dict] = []
     for i, (p, res) in enumerate(zip(positions, results)):
         e_best = res.e_best
         next_e_best = results[i + 1].e_best if i + 1 < len(results) else e_best_after_last
         e_played = 1.0 - next_e_best
         e_loss = max(0.0, e_best - e_played)
-        crit = res.criticality
+        need = min(config.MULTIPV, chess.Board(p["fen"]).legal_moves.count()) if "fen" in p.keys() else 1
+        full = len(res.candidates) >= need
+        crit = res.criticality if full else None
         obvious = res.obvious
         out.append({
             "id": p["id"],
@@ -48,9 +59,9 @@ def score_positions(positions: list[sqlite3.Row], results: list[AnalysisResult],
             "e_best": round(e_best, 4),
             "e_played": round(e_played, 4),
             "e_loss": round(e_loss, 4),
-            "criticality": round(crit, 4),
+            "criticality": None if crit is None else round(crit, 4),
             "obvious": int(obvious),
-            "label": label(crit, obvious, fork=is_fork(p["commitment"])),
+            "label": label(crit, obvious, fork=is_fork(p["commitment"])) if full else None,
         })
     return out
 
@@ -59,11 +70,15 @@ def analyze_game(con: sqlite3.Connection, game_id: int, depth: int, engine: Engi
                  cache: AnalysisCache) -> int:
     """Analyze and score every ply of one game; returns the number of plies scored."""
     positions = con.execute(
-        "SELECT id, ply, fen, move_played, commitment FROM positions WHERE game_id = ? ORDER BY ply",
-        (game_id,)).fetchall()
+        "SELECT id, ply, fen, move_played, user_to_move, commitment FROM positions "
+        "WHERE game_id = ? ORDER BY ply", (game_id,)).fetchall()
     if not positions:
         return 0
-    results = [analyze_position(chess.Board(p["fen"]), depth, engine, cache) for p in positions]
+    results = [
+        analyze_position(chess.Board(p["fen"]), depth, engine, cache,
+                         multipv=config.MULTIPV if p["user_to_move"] else config.OPPONENT_MULTIPV)
+        for p in positions
+    ]
 
     # The position after the final move has no `positions` row but is needed for the
     # last ply's e_played. Cache it in `analysis` unless the game is over there.
@@ -72,7 +87,7 @@ def analyze_game(con: sqlite3.Connection, game_id: int, depth: int, engine: Engi
     if last.is_game_over():
         e_after = terminal_e_best(last)
     else:
-        e_after = analyze_position(last, depth, engine, cache).e_best
+        e_after = analyze_position(last, depth, engine, cache, multipv=config.OPPONENT_MULTIPV).e_best
 
     con.executemany(
         """UPDATE positions SET analysis_id = :analysis_id, e_best = :e_best, e_played = :e_played,
@@ -93,37 +108,71 @@ def pending_games(con: sqlite3.Connection, depth: int, limit: int | None) -> lis
     return con.execute(sql, (depth,)).fetchall()
 
 
+def _run_games(con: sqlite3.Connection, games: list, depth: int, engine: Engine, log: Log,
+               tag: str = "") -> int:
+    cache = AnalysisCache(con)
+    done = 0
+    for g in games:
+        t0 = time.perf_counter()
+        before = engine.searches
+        plies = analyze_game(con, g["id"], depth, engine, cache)
+        done += 1
+        log(f"[analyze{tag}] {done}/{len(games)} {g['url']} plies={plies} "
+            f"searches={engine.searches - before} capped={engine.capped} "
+            f"{time.perf_counter() - t0:.1f}s")
+    log(f"[analyze{tag}] done: games={done} searches={engine.searches} capped={engine.capped} "
+        f"cache_hits={cache.hits}")
+    return done
+
+
+def _worker(args: tuple) -> int:
+    """Entry point for one engine process: own connection, own engine, its share of games."""
+    db_path, game_ids, depth, threads, idx = args
+    con = db.connect(db_path)
+    con.execute("PRAGMA busy_timeout = 60000")
+    rows = [con.execute("SELECT id, url, played_at FROM games WHERE id = ?", (gid,)).fetchone()
+            for gid in game_ids]
+    try:
+        with Engine(threads=threads, hash_mb=max(64, config.HASH_MB // max(1, config.WORKERS))) as engine:
+            return _run_games(con, rows, depth, engine, print, tag=f" w{idx}")
+    finally:
+        con.close()
+
+
 def analyze(con: sqlite3.Connection, *, depth: int = config.ANALYSIS_DEPTH, limit: int | None = None,
-            engine: Engine | None = None, log: Log = print) -> int:
+            engine: Engine | None = None, workers: int = 1, log: Log = print) -> int:
     """Analyze every game not yet scored at `depth`. Returns the number of games processed."""
     games = pending_games(con, depth, limit)
     if not games:
         log(f"[analyze] nothing to do at depth {depth}")
         return 0
+    log(f"[analyze] {len(games)} game(s) at depth {depth}, shallow {config.SHALLOW_DEPTH}, "
+        f"cap {config.MAX_SEARCH_SECONDS}s, opponent multipv {config.OPPONENT_MULTIPV}, "
+        f"workers {workers}, threads {config.THREADS}")
+
+    if workers > 1 and engine is None:
+        db_path = con.execute("PRAGMA database_list").fetchone()[2]
+        config.WORKERS = workers
+        threads = max(1, config.THREADS // workers)
+        shares = [[g["id"] for g in games[i::workers]] for i in range(workers)]
+        con.execute("PRAGMA busy_timeout = 60000")
+        with mp.get_context("spawn").Pool(workers) as pool:
+            counts = pool.map(_worker, [(db_path, share, depth, threads, i) for i, share in enumerate(shares)])
+        log(f"[analyze] all workers done: games={sum(counts)}")
+        return sum(counts)
+
     own_engine = engine is None
     engine = engine or Engine()
-    cache = AnalysisCache(con)
-    log(f"[analyze] {len(games)} game(s) at depth {depth}, shallow {engine.shallow_depth}, "
-        f"threads {config.THREADS}, engine {engine.path}")
-    done = 0
     try:
-        for g in games:
-            t0 = time.perf_counter()
-            before = engine.searches
-            plies = analyze_game(con, g["id"], depth, engine, cache)
-            done += 1
-            log(f"[analyze] {done}/{len(games)} {g['url']} plies={plies} "
-                f"searches={engine.searches - before} {time.perf_counter() - t0:.1f}s")
+        return _run_games(con, games, depth, engine, log)
     finally:
         if own_engine:
             engine.close()
-    log(f"[analyze] done: games={done} searches={engine.searches} cache_hits={cache.hits}")
-    return done
 
 
 def reshallow(con: sqlite3.Connection, *, engine: Engine | None = None, log: Log = print) -> int:
     """Recompute shallow_best_move for every cached analysis row at the current SHALLOW_DEPTH,
-    then re-score positions. Cheap; used after retuning SHALLOW_DEPTH (the cache key does
+    then re-derive obvious/label. Cheap; used after retuning SHALLOW_DEPTH (the cache key does
     not include the shallow depth)."""
     own_engine = engine is None
     engine = engine or Engine()
@@ -143,12 +192,11 @@ def reshallow(con: sqlite3.Connection, *, engine: Engine | None = None, log: Log
     finally:
         if own_engine:
             engine.close()
-    # Re-derive obvious/label from the refreshed cache without new deep searches.
     con.execute("""UPDATE positions SET obvious = (SELECT a.best_move = a.shallow_best_move
                                                      FROM analysis a WHERE a.id = positions.analysis_id)
                     WHERE analysis_id IS NOT NULL""")
     for p in con.execute("SELECT id, criticality, obvious, commitment FROM positions "
-                         "WHERE analysis_id IS NOT NULL").fetchall():
+                         "WHERE analysis_id IS NOT NULL AND criticality IS NOT NULL").fetchall():
         con.execute("UPDATE positions SET label = ? WHERE id = ?",
                     (label(p["criticality"], bool(p["obvious"]), is_fork(p["commitment"])), p["id"]))
     con.commit()

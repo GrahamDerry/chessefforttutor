@@ -31,6 +31,8 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("analyze", help="run Stockfish over every unscored game")
     s.add_argument("--limit", type=int, metavar="N", help="analyze at most N games")
     s.add_argument("--depth", type=int, default=config.ANALYSIS_DEPTH, metavar="D")
+    s.add_argument("--workers", type=int, default=config.WORKERS, metavar="N",
+                   help="parallel engine processes, one game each (default %(default)s)")
     s.add_argument("--reshallow", action="store_true",
                    help="only refresh shallow_best_move/obvious/label at the current SHALLOW_DEPTH")
 
@@ -65,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.reshallow:
                 reshallow(con)
             else:
-                analyze(con, depth=args.depth, limit=args.limit)
+                analyze(con, depth=args.depth, limit=args.limit, workers=args.workers)
         elif args.cmd == "scenarios":
             from pipeline.scenarios import generate
             generate(con)

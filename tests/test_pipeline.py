@@ -119,6 +119,59 @@ def test_percentile_and_archive_selection():
     assert select_archives(arcs, months=3, newest_first=True)[0].endswith("/09")
 
 
+# --------------------------------------------------------------------------- ingest (offline, Chess.com-shaped)
+CHESSCOM_GAME = {
+    "url": "https://www.chess.com/game/live/1", "time_class": "blitz", "time_control": "180+2",
+    "rules": "chess", "end_time": 1789000000,
+    "white": {"username": "Someone", "rating": 2200}, "black": {"username": "reitsy", "rating": 2300},
+    "pgn": '[Event "Live Chess"]\n[Result "0-1"]\n[UTCDate "2026.09.01"]\n[UTCTime "10:00:00"]\n'
+           '[ECO "B00"]\n[TimeControl "180+2"]\n[Termination "Reitsy won by resignation"]\n'
+           '[Link "https://www.chess.com/game/live/1"]\n\n'
+           '1. e4 {[%clk 0:03:01.5]} 1... e5 {[%clk 0:02:59.9]} 2. Nf3 {[%clk 0:03:02.1]} '
+           '2... Nc6 {[%clk 0:02:51.3]} 0-1',
+}
+
+
+def test_parse_game_clocks_with_increment_and_tenths():
+    from pipeline.ingest import parse_game
+    game, pos = parse_game(CHESSCOM_GAME, username="Reitsy")
+    assert game["user_color"] == "black" and game["result_user"] == 1.0
+    assert (game["base_seconds"], game["increment"]) == (180, 2)
+    assert game["played_at"] == "2026-09-01T10:00:00Z" and game["opp_name"] == "Someone"
+    assert [p["ply"] for p in pos] == [1, 2, 3, 4]
+    # White's first move: 180 -> 181.5 after +2 increment means 0.5 s spent, not -1.5.
+    assert pos[0]["clock_before"] == 180.0 and pos[0]["seconds_spent"] == pytest.approx(0.5)
+    # Black's first move compares against base too: 180 -> 179.9 (+2) = 2.1 s.
+    assert pos[1]["user_to_move"] == 1 and pos[1]["seconds_spent"] == pytest.approx(2.1)
+    # Later moves compare against the same side's previous clock: 181.5 -> 182.1 (+2) = 1.4 s.
+    assert pos[2]["clock_before"] == pytest.approx(181.5) and pos[2]["seconds_spent"] == pytest.approx(1.4)
+    assert pos[3]["seconds_spent"] == pytest.approx(10.6)
+    assert pos[3]["time_fraction"] == pytest.approx(10.6 / 179.9, rel=1e-3)
+    assert pos[3]["move_san"] == "Nc6" and pos[3]["move_played"] == "b8c6"
+
+
+def test_ingest_into_db_is_idempotent(tmp_path):
+    from pipeline import db
+    from pipeline.ingest import ingest
+
+    class FakeClient:
+        def archives(self):
+            return ["https://api.chess.com/pub/player/reitsy/games/2026/09"]
+
+        def month_games(self, url):
+            bullet = dict(CHESSCOM_GAME, url="https://www.chess.com/game/live/2", time_class="bullet")
+            noclock = dict(CHESSCOM_GAME, url="https://www.chess.com/game/live/3",
+                           pgn=CHESSCOM_GAME["pgn"].replace("{[%clk 0:03:01.5]} ", "").replace("%clk", "x"))
+            return [CHESSCOM_GAME, bullet, noclock]
+
+    con = db.connect(tmp_path / "t.db")
+    s1 = ingest(con, months=1, client=FakeClient(), log=lambda m: None)
+    assert (s1.inserted, s1.skipped_time_class, s1.skipped_no_clock) == (1, 1, 1)
+    s2 = ingest(con, months=1, client=FakeClient(), log=lambda m: None)
+    assert s2.inserted == 0 and s2.skipped_existing == 1
+    assert con.execute("SELECT COUNT(*) FROM positions").fetchone()[0] == 4
+
+
 # --------------------------------------------------------------------------- scoring (e_played from next ply)
 def _res(e_best, e_rest, best="a1a2", shallow="a1a2", id_=1):
     es = [e_best] + list(e_rest)
@@ -127,14 +180,18 @@ def _res(e_best, e_rest, best="a1a2", shallow="a1a2", id_=1):
                           id=id_)
 
 
-def _pos(id_, commitment=None):
-    return {"id": id_, "commitment": commitment}
+START = chess.STARTING_FEN
+
+
+def _pos(id_, commitment=None, fen=START):
+    return {"id": id_, "commitment": commitment, "fen": fen}
 
 
 def test_score_positions_flips_perspective_for_e_played():
     # Ply 1 (user): best 0.60. Ply 2 (opponent to move): best 0.55 from THEIR side,
     # so the user's move yielded 0.45 -> loss 0.15. Last ply's next is the terminal value.
-    results = [_res(0.60, [0.40, 0.40, 0.40], id_=1), _res(0.55, [0.55, 0.54], best="b", shallow="c", id_=2)]
+    results = [_res(0.60, [0.40, 0.40, 0.40], id_=1),
+               _res(0.55, [0.55, 0.55, 0.54], best="b", shallow="c", id_=2)]
     rows = score_positions([_pos(1), _pos(2)], results, e_best_after_last=0.30)
     assert rows[0]["e_played"] == pytest.approx(0.45)
     assert rows[0]["e_loss"] == pytest.approx(0.15)
@@ -144,6 +201,19 @@ def test_score_positions_flips_perspective_for_e_played():
     assert rows[1]["e_loss"] == 0.0                                       # gains are clamped
     assert rows[1]["obvious"] == 0 and rows[1]["label"] == "SHORT"       # C = 0.005 <= CALM
     assert rows[1]["analysis_id"] == 2
+
+
+def test_score_positions_leaves_lite_rows_unlabelled():
+    # An opponent ply searched with one line still yields e_best/e_played but no label.
+    lite = _res(0.55, [])
+    rows = score_positions([_pos(1)], [lite], e_best_after_last=0.40)
+    assert rows[0]["e_played"] == pytest.approx(0.60) and rows[0]["e_loss"] == 0.0
+    assert rows[0]["criticality"] is None and rows[0]["label"] is None
+    # ...but a position with a single legal move is "full" with one line (C = 0 -> SHORT).
+    one_move = "k7/1p6/8/8/8/8/8/R6K b - - 0 1"     # Ka8 in check, only Kb8
+    assert chess.Board(one_move).legal_moves.count() == 1
+    rows = score_positions([_pos(1, fen=one_move)], [_res(0.0, [])], 1.0)
+    assert rows[0]["label"] == "SHORT" and rows[0]["criticality"] == 0.0
 
 
 def test_score_positions_keeps_fork_label():

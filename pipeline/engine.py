@@ -69,6 +69,7 @@ class Engine:
         self.shallow = chess.engine.SimpleEngine.popen_uci(path)
         self.shallow.configure({"Threads": config.SHALLOW_THREADS, "Hash": config.SHALLOW_HASH_MB})
         self.searches = 0
+        self.capped = 0                  # deep searches stopped by the time cap before reaching depth
 
     # ------------------------------------------------------------------ lifecycle
     def close(self) -> None:
@@ -95,11 +96,14 @@ class Engine:
         return self.shallow.play(board, chess.engine.Limit(depth=self.shallow_depth),
                                  game=object()).move.uci()
 
-    def search(self, board: chess.Board, depth: int) -> AnalysisResult:
-        """Uncached MultiPV search at `depth` plus the shallow probe."""
+    def search(self, board: chess.Board, depth: int, multipv: int = config.MULTIPV) -> AnalysisResult:
+        """Uncached MultiPV search at `depth` (capped at MAX_SEARCH_SECONDS) plus the shallow probe."""
         if board.is_game_over():
             raise ValueError("terminal position has no candidates")
-        infos = self.deep.analyse(board, chess.engine.Limit(depth=depth), multipv=config.MULTIPV)
+        limit = chess.engine.Limit(depth=depth, time=config.MAX_SEARCH_SECONDS)
+        infos = self.deep.analyse(board, limit, multipv=multipv)
+        if infos and infos[0].get("depth", depth) < depth:
+            self.capped += 1
         infos = sorted(infos, key=lambda i: i.get("multipv", 1))
         candidates: list[dict] = []
         for info in infos:
@@ -147,12 +151,17 @@ class AnalysisCache:
         return res
 
     def put(self, res: AnalysisResult) -> AnalysisResult:
+        """Insert, or upgrade an existing row that has fewer candidate lines than `res`."""
         self.con.execute(
             """INSERT OR IGNORE INTO analysis (fen_key, depth, best_move, shallow_best_move, candidates_json)
                VALUES (?,?,?,?,?)""",
             (res.fen_key, res.depth, res.best_move, res.shallow_best_move, res.candidates_json))
-        res.id = self.con.execute("SELECT id FROM analysis WHERE fen_key = ? AND depth = ?",
-                                  (res.fen_key, res.depth)).fetchone()[0]
+        row = self.con.execute("SELECT id, candidates_json FROM analysis WHERE fen_key = ? AND depth = ?",
+                               (res.fen_key, res.depth)).fetchone()
+        res.id = row["id"]
+        if len(json.loads(row["candidates_json"])) < len(res.candidates):
+            self.con.execute("UPDATE analysis SET best_move = ?, shallow_best_move = ?, candidates_json = ? "
+                             "WHERE id = ?", (res.best_move, res.shallow_best_move, res.candidates_json, res.id))
         self.mem[(res.fen_key, res.depth)] = res
         return res
 
@@ -162,11 +171,16 @@ class AnalysisCache:
                          (shallow_best_move, res.id))
 
 
-def analyze_position(board: chess.Board, depth: int, engine: Engine,
-                     cache: AnalysisCache) -> AnalysisResult:
-    """Cached analysis of one (non-terminal) position."""
+def analyze_position(board: chess.Board, depth: int, engine: Engine, cache: AnalysisCache,
+                     multipv: int = config.MULTIPV) -> AnalysisResult:
+    """Cached analysis of one (non-terminal) position with at least `multipv` lines.
+
+    A cached row with fewer lines than requested (an opponent-ply search that is now
+    needed as a user decision point) is re-searched and upgraded in place.
+    """
     key = fen_key(board)
+    need = min(multipv, board.legal_moves.count())
     res = cache.get(key, depth)
-    if res is None:
-        res = cache.put(engine.search(board, depth))
+    if res is None or len(res.candidates) < need:
+        res = cache.put(engine.search(board, depth, multipv=multipv))
     return res
