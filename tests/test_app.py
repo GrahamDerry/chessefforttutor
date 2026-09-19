@@ -171,3 +171,10 @@ def test_next_balances_a_skewed_pool(client):
     longs = sum(client.get("/api/drill/next").json()["scenario_id"] == client.ids["blunder"]
                 for _ in range(200))
     assert 70 < longs < 130, f"expected roughly half LONG, got {longs}/200"
+
+
+def test_explanation_has_no_double_spaces():
+    row = {"ground_truth": "SHORT", "criticality": 0.02, "obvious": 1, "commitment": None,
+           "seconds_spent": 17.4, "time_fraction": 0.14, "e_loss": 0.02,
+           "move_san": "Kg2", "kind": "too_much"}
+    assert "  " not in explain(row)

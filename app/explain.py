@@ -48,11 +48,11 @@ def what_happened(r: Mapping) -> str:
     pieces = [f"You played {r['move_san']} in {_secs(spent)}"]
     if frac is not None:
         pieces.append(f"({frac * 100:.0f}% of your remaining clock)")
-    tail = ". "
+    tail = "."
     if loss is not None and loss >= 0.20:
-        tail = f", losing {_pts(loss)} expected points. "
+        tail = f", losing {_pts(loss)} expected points."
     elif loss is not None and loss >= 0.05:
-        tail = f", costing {_pts(loss)} expected points. "
+        tail = f", costing {_pts(loss)} expected points."
     return " ".join(pieces) + tail
 
 
