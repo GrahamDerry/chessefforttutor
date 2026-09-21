@@ -1,8 +1,9 @@
 import { renderBoard, fmtClock } from '/static/board.js';
 
 const el = id => document.getElementById(id);
-const seen = [];                 // scenario ids this session, so we don't repeat
+const seen = [];                 // scenario ids this session; the server also skips their games
 const REPLAY_MS = 1000;          // pause per half-move while replaying the lead-in
+const EXCLUDE_WINDOW = 500;      // how many seen ids to send back (~3 KB of query string)
 let current = null, shownAt = 0, answered = false;
 let done = 0, right = 0;
 // Lead-in replay state. `replayToken` invalidates timers from a skipped or superseded replay.
@@ -16,7 +17,7 @@ async function load() {
   el('replay').classList.add('hidden');
   el('moves').textContent = '';
   setButtons(false);
-  const q = seen.length ? `?exclude=${seen.slice(-40).join(',')}` : '';
+  const q = seen.length ? `?exclude=${seen.slice(-EXCLUDE_WINDOW).join(',')}` : '';
   const res = await fetch(`/api/drill/next${q}`);
   if (!res.ok) {
     el('sub').textContent = (await res.json()).detail || 'No positions available.';
