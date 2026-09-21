@@ -1,8 +1,11 @@
-# Chess Effort Tutor — Project Spec
+# Chess Effort Tutor — Design
 
-A personal chess tutor that mines **Reitsy**'s Chess.com blitz games for the moments
+A personal chess tutor that mines a Chess.com player's blitz games for the moments
 where time was misallocated, then drills one decision per position:
 **think long, or think short?**
+
+This document holds the definitions, the schema, and a description of each component.
+For how to run the program, see [README.md](README.md).
 
 Every existing puzzle tool asks "what's the best move?" — and by being a puzzle, it
 tells you the position is critical. Real games never do. This app trains the triage
@@ -11,11 +14,11 @@ you actually did on the clock.
 
 ---
 
-## 1. Decisions already made
+## 1. Design decisions
 
 | Topic | Decision |
 |---|---|
-| Player | Chess.com user `Reitsy` (~2300 blitz). Archive: 40 months, 2014-08 → 2026-09. Last 6 months ≈ 500 blitz games (mostly `300`, some `180`, `300+5`). |
+| Player | Any Chess.com user, set by `CHESSCOM_USER`. Thresholds were tuned on the author's account (~2300 blitz, ≈500 blitz games per 6 months, mostly `300`, some `180` and `300+5`). |
 | Game scope (v1) | `time_class == "blitz"` only. Ignore bullet/rapid/daily. |
 | Engine | Stockfish 19 (`brew install stockfish`, at `/opt/homebrew/bin/stockfish`). Engine is ground truth; an LLM may *explain* but never *evaluate*. |
 | Stack | Python 3.14, `python-chess`, SQLite, FastAPI + uvicorn, plain JS frontend (chessboard rendered with `chessground` or `chessboard.js` via CDN). |
@@ -92,17 +95,18 @@ e_loss   = e_best − e_played
 | `fork` | `fork == true` |
 | `calm` | label SHORT, sampled to balance the drill (see §5) |
 
-All thresholds live in one place: `pipeline/config.py`. They **will** be retuned once
-we see the distribution on real games — Reitsy is 2300-rated, so `SHALLOW_DEPTH` and
-`CRIT` may both need to go up.
+All thresholds live in one place: `pipeline/config.py`. They were tuned against a
+2300-rated player's games using `python -m pipeline report`; for a different strength,
+`SHALLOW_DEPTH` and `CRIT` are the first two to revisit.
 
 ---
 
 ## 3. The contract: SQLite schema
 
-File: `data/tutor.db`. Bucket A writes it; Bucket B reads it. **Neither bucket changes
-this schema without a PR that both people approve.** Canonical DDL lives in
-`pipeline/schema.sql` and is the single source of truth; this table is documentation.
+File: `data/tutor.db` (or wherever `TUTOR_DB` points). `pipeline/` writes every table;
+`app/` reads everything and writes only `drill_attempts`. Canonical DDL lives in
+`pipeline/schema.sql` and is the single source of truth; the copy below is documentation
+and should be updated in the same change.
 
 ```sql
 CREATE TABLE games (
@@ -179,22 +183,21 @@ CREATE TABLE drill_attempts (
 );
 ```
 
-**Fixture:** Bucket A's first deliverable (before any engine work) is
-`data/fixture.db` — the schema above populated with ~5 hand-analyzed games / ~40
-scenarios — so Bucket B can build against real-shaped data on day one.
-Until it exists, Bucket B generates its own from `pipeline/schema.sql` with fake rows.
+**Sample data:** `data/fixture.db` is committed. It is this schema populated by
+`python -m pipeline fixture` (§4 A6) from five of the author's games at depth 12, so the
+app can be tried without an engine.
 
 ---
 
-## 4. Bucket A — Data pipeline  (`pipeline/`)
+## 4. Data pipeline  (`pipeline/`)
 
-**Owner:** _____ **Goal:** turn Chess.com archives into a fully populated `tutor.db`.
+**Goal:** turn Chess.com archives into a fully populated `tutor.db`.
 
 Everything runs as a CLI: `python -m pipeline <command>`. Idempotent — re-running skips
 work already done (games by `url`, analysis by `(fen_key, depth)`).
 
 ### A1. Ingest — `python -m pipeline ingest [--since YYYY-MM] [--months N]`
-- Fetch `https://api.chess.com/pub/player/Reitsy/games/archives`, then each monthly URL.
+- Fetch `https://api.chess.com/pub/player/<CHESSCOM_USER>/games/archives`, then each monthly URL.
   Send header `User-Agent: chessefforttutor (github.com/GrahamDerry/chessefforttutor)` — required or Chess.com blocks.
 - Keep `time_class == "blitz"` only. Skip games with no `%clk` data (flag count).
 - Parse PGN with `chess.pgn`. Populate `games` and `positions` (all columns except analysis fields).
@@ -208,8 +211,10 @@ work already done (games by `url`, analysis by `(fen_key, depth)`).
 - `analyze(board) -> AnalysisResult` at `ANALYSIS_DEPTH`, plus a `SHALLOW_DEPTH` search.
 - Cache through `analysis` table by `fen_key`. **Mate handling:** `E = 1.0` / `0.0`.
 - Batch by game; commit per game so a crash loses ≤1 game.
-- `python -m pipeline analyze [--limit N] [--depth D]` — fills `analysis`, then per position
-  `e_best, e_played, e_loss, criticality, obvious, label`.
+- `python -m pipeline analyze [--limit N] [--depth D] [--workers N]` — fills `analysis`, then
+  per position `e_best, e_played, e_loss, criticality, obvious, label`. Cache rows are
+  committed as soon as they are searched, so the run is resumable and workers can share a DB.
+- `--reshallow` refreshes only `shallow_best_move`/`obvious`/`label` after `SHALLOW_DEPTH` changes.
 
 ### A3. Commitment / fork pass — `python -m pipeline forks`
 - Runs only on positions meeting the gate in §2. Uses depth 12 for the downstream searches.
@@ -230,7 +235,7 @@ work already done (games by `url`, analysis by `(fen_key, depth)`).
   scenario counts by kind, and per-phase mean `e_loss`. This is how we tune `config.py`.
 
 ### A6. Fixture — `python -m pipeline fixture`
-- Runs A1–A4 on 5 games drawn at random from the last 6 months, at depth 12, and writes `data/fixture.db`. **Do this first**, commit it. Random rather than most-recent so the drill is not dominated by games still fresh in memory.
+- Runs A1–A4 on 5 games drawn at random from the last 6 months, at depth 12, and writes `data/fixture.db`. Random rather than most-recent so the drill is not dominated by games still fresh in memory.
 
 ### Tests (`tests/test_pipeline.py`)
 - Clock arithmetic incl. increment and tenths; `E()` at 0, ±100, mate; criticality on a
@@ -238,18 +243,19 @@ work already done (games by `url`, analysis by `(fen_key, depth)`).
 
 ---
 
-## 5. Bucket B — Web app  (`app/`)
+## 5. Web app  (`app/`)
 
-**Owner:** _____ **Goal:** the drill. Reads `data/tutor.db` (or `fixture.db` via
-`TUTOR_DB` env var). Never writes to any table except `drill_attempts`.
+**Goal:** the drill. Reads `data/tutor.db` (or whatever `TUTOR_DB` points at). Never
+writes to any table except `drill_attempts`.
 
 Run: `uvicorn app.main:app --reload` → http://localhost:8000
 
 ### B1. API (FastAPI, `app/main.py`, `app/db.py`)
 ```
 GET  /api/drill/next?exclude=<ids>   → { scenario_id, fen, user_color, clock_before,
-                                          base_seconds, increment, ply }
+                                          base_seconds, increment, ply, history[] }
                                         # random scenario, balanced LONG/SHORT, prefer never-attempted;
+                                        # at most one position per game per session (exclude = ids seen);
                                         # NEVER leaks kind, ground_truth, or result
 POST /api/drill/answer               ← { scenario_id, answer: "LONG"|"SHORT", response_ms }
                                      → { correct, ground_truth, kind, criticality, obvious,
@@ -267,6 +273,8 @@ GET  /api/scenarios/{id}             → full detail (for the review page)
 ### B2. Drill page (`app/static/index.html`, `drill.js`)
 - Board oriented to the user's color, side-to-move indicator, the **actual clock reading**
   shown as it was in the game. Nothing else — no opening name, no opponent, no result.
+- The last few half-moves (`history`) are replayed on the board before the position is
+  shown, one per second; any key skips the replay.
 - Two big buttons: **Think long** / **Think short**. Keyboard: `L` / `S`.
 - Measure `response_ms` from board render to click.
 - On answer: reveal panel — correct/incorrect, the label and why, what you actually
@@ -286,36 +294,29 @@ GET  /api/scenarios/{id}             → full detail (for the review page)
 
 ---
 
-## 6. Working in parallel
+## 6. Repo conventions
 
-**Repo layout**
 ```
+README.md             how to run it
 SPEC.md               this file
 requirements.txt
-pipeline/             Bucket A   (schema.sql lives here — owned by A, changed only by joint PR)
-app/                  Bucket B
+pipeline/             data pipeline; schema.sql lives here
+app/                  drill API + static frontend
 data/                 fixture.db committed; tutor.db git-ignored
 tests/
 ```
 
-**Rules**
-1. `main` is always runnable. Work on branches `a/<feature>`, `b/<feature>`; merge via PR.
-   Small PRs, merged often, beat one big one.
-2. The schema is the only shared surface. Need a column? Open a PR touching only
-   `pipeline/schema.sql` + this file, tag the other person, merge before using it.
-3. Bucket B never imports from `pipeline/` except `pipeline/config.py` (for thresholds
-   shown in explanations). Bucket A never imports from `app/`.
-4. Both buckets read `TUTOR_DB` (default `data/tutor.db`) so either can point at the fixture.
-5. Prompt for the agent: paste §1–§3 plus *your* bucket's section. Say which section you own.
-
-**Integration milestones**
-- **M1** — `fixture.db` committed (A6) · drill page serves a position from it (B1+B2). *End of day 1.*
-- **M2** — Full blitz archive (last 6 months) analyzed at depth 18 (A1–A2, A5) · reveal panel + stats page (B2–B3). Retune `config.py` from the report — together.
-- **M3** — Forks and calm sampling live (A3–A4) · explanations (B4) · run 100 attempts and see whether accuracy differs by `kind`. Then decide v2.
+1. `app/` never imports from `pipeline/` except `pipeline/config.py` (for thresholds shown
+   in explanations). `pipeline/` never imports from `app/`. The schema is the only shared
+   surface.
+2. Both sides read `TUTOR_DB` (default `data/tutor.db`), so either can be pointed at the
+   fixture or at a scratch database.
+3. Schema changes update `pipeline/schema.sql` and §3 of this file in the same commit.
+4. Tests need neither Stockfish nor network access.
 
 ---
 
-## 7. Out of scope for v1 (parked)
+## 7. Out of scope (ideas for later)
 Missed wins (opponent blundered, you didn't punish) · opening repertoire gap analysis ·
 structural-distance fork detection · spaced repetition · LLM-written explanations ·
 "find the move" mode · other time classes · hosting.

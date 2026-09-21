@@ -1,4 +1,4 @@
-"""Bucket B tests: the API must never leak the answer, and must record attempts."""
+"""App tests: the API must never leak the answer, and must record attempts."""
 import json
 import sqlite3
 from datetime import datetime, timezone

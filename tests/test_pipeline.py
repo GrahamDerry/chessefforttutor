@@ -1,4 +1,4 @@
-"""Bucket A tests (SPEC.md §4): pure metrics, scoring, scenario invariants. No engine needed."""
+"""Pipeline tests (SPEC.md §4): pure metrics, scoring, scenario invariants. No engine needed."""
 import json
 import math
 import sqlite3
@@ -166,9 +166,9 @@ def test_ingest_into_db_is_idempotent(tmp_path):
             return [CHESSCOM_GAME, bullet, noclock]
 
     con = db.connect(tmp_path / "t.db")
-    s1 = ingest(con, months=1, client=FakeClient(), log=lambda m: None)
+    s1 = ingest(con, months=1, client=FakeClient(), username="Reitsy", log=lambda m: None)
     assert (s1.inserted, s1.skipped_time_class, s1.skipped_no_clock) == (1, 1, 1)
-    s2 = ingest(con, months=1, client=FakeClient(), log=lambda m: None)
+    s2 = ingest(con, months=1, client=FakeClient(), username="Reitsy", log=lambda m: None)
     assert s2.inserted == 0 and s2.skipped_existing == 1
     assert con.execute("SELECT COUNT(*) FROM positions").fetchone()[0] == 4
 
@@ -211,7 +211,7 @@ def test_ingest_shuffle_samples_across_months(tmp_path):
     client = _TwoMonthClient()
     con = db.connect(tmp_path / "t.db")
     stats = ingest(con, months=2, limit=3, shuffle=True, rng=random.Random(SHUFFLE_SEED),
-                   client=client, log=lambda m: None)
+                   client=client, username="Reitsy", log=lambda m: None)
     assert stats.inserted == 3 and stats.months == 2
     assert len(client.requested) == 2, "every month is fetched before any game is picked"
     urls = {r[0] for r in con.execute("SELECT url FROM games")}
@@ -230,10 +230,10 @@ def test_ingest_shuffle_skips_existing(tmp_path):
 
     client = _TwoMonthClient()
     con = db.connect(tmp_path / "t.db")
-    ingest(con, months=1, limit=1, client=client, log=lambda m: None)   # one game already there
+    ingest(con, months=1, limit=1, client=client, username="Reitsy", log=lambda m: None)   # one game already there
     assert con.execute("SELECT COUNT(*) FROM games").fetchone()[0] == 1
     stats = ingest(con, months=2, limit=5, shuffle=True, rng=random.Random(1),
-                   client=client, log=lambda m: None)
+                   client=client, username="Reitsy", log=lambda m: None)
     assert stats.inserted == 5 and stats.skipped_existing == 1
     assert con.execute("SELECT COUNT(*) FROM games").fetchone()[0] == 6
     assert con.execute("SELECT COUNT(DISTINCT url) FROM games").fetchone()[0] == 6
@@ -378,3 +378,11 @@ def test_analysis_cache_commits_immediately_so_workers_do_not_block(tmp_path):
                                         candidates=[{"move": "d2d4", "e": 0.5}]))
     assert a.execute("SELECT COUNT(*) FROM analysis").fetchone()[0] == 2
     a.close(); b.close()
+
+
+def test_username_comes_from_env(monkeypatch):
+    monkeypatch.setenv("CHESSCOM_USER", "SomePlayer")
+    assert config.username() == "SomePlayer"
+    monkeypatch.delenv("CHESSCOM_USER")
+    with pytest.raises(RuntimeError, match="CHESSCOM_USER"):
+        config.username()

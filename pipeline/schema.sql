@@ -1,6 +1,6 @@
 -- Canonical schema for data/tutor.db. Single source of truth (see SPEC.md §3).
--- Changes require a joint PR touching this file + SPEC.md.
--- Bucket A (pipeline/) writes every table; Bucket B (app/) writes only drill_attempts.
+-- Schema changes go together with an update to SPEC.md §3.
+-- pipeline/ writes every table; app/ writes only drill_attempts.
 
 PRAGMA foreign_keys = ON;
 

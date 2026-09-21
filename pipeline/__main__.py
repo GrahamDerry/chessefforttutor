@@ -2,7 +2,7 @@
 
     ingest    [--since YYYY-MM] [--months N] [--limit N] [--shuffle]
     analyze   [--limit N] [--depth D] [--reshallow]
-    forks                                   (A3, not implemented yet)
+    forks     [--depth D] [--limit N] [--recompute]
     scenarios
     report
     fixture   [--games N] [--depth D] [--out PATH]

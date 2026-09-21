@@ -1,6 +1,6 @@
 """SQLite access for the drill app.
 
-Bucket B reads everything and writes only drill_attempts (SPEC.md §5).
+The app reads everything and writes only drill_attempts (SPEC.md §5).
 """
 import os
 import sqlite3
@@ -18,8 +18,9 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     p = Path(path) if path else db_path()
     if not p.exists():
         raise FileNotFoundError(
-            f"No database at {p}. Set TUTOR_DB, or build one with "
-            f"`python tools/make_fake_db.py data/fake.db`."
+            f"No database at {p}. Try the sample data with TUTOR_DB=data/fixture.db, "
+            f"or build your own with `python -m pipeline ingest` then `python -m pipeline analyze` "
+            f"(see README.md)."
         )
     con = sqlite3.connect(p, check_same_thread=False)
     con.row_factory = sqlite3.Row

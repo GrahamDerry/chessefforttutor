@@ -65,9 +65,10 @@ def _played_at(headers: chess.pgn.Headers, g: dict) -> str:
     return datetime.fromtimestamp(int(g["end_time"]), tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def parse_game(g: dict, username: str = config.USERNAME,
+def parse_game(g: dict, username: str | None = None,
                stats: IngestStats | None = None) -> tuple[dict, list[dict]]:
     """One Chess.com game JSON -> (games row, positions rows). Raises ValueError if unusable."""
+    username = username or config.username()
     stats = stats or IngestStats()
     game = chess.pgn.read_game(io.StringIO(g["pgn"]))
     if game is None:
@@ -167,7 +168,7 @@ def game_exists(con: sqlite3.Connection, url: str) -> bool:
     return con.execute("SELECT 1 FROM games WHERE url = ?", (url,)).fetchone() is not None
 
 
-def _try_insert(con: sqlite3.Connection, g: dict, stats: IngestStats) -> bool:
+def _try_insert(con: sqlite3.Connection, g: dict, stats: IngestStats, username: str) -> bool:
     """Filter, parse and store one Chess.com game. True only if a row was inserted."""
     if not qualifies(g, stats):
         return False
@@ -175,7 +176,7 @@ def _try_insert(con: sqlite3.Connection, g: dict, stats: IngestStats) -> bool:
         stats.skipped_existing += 1
         return False
     try:
-        game_row, positions = parse_game(g, stats=stats)
+        game_row, positions = parse_game(g, username=username, stats=stats)
     except (ValueError, KeyError) as exc:
         stats.skipped_unparseable += 1
         stats.errors.append(f"{g.get('url')}: {exc}")
@@ -190,7 +191,7 @@ def _try_insert(con: sqlite3.Connection, g: dict, stats: IngestStats) -> bool:
 
 def ingest(con: sqlite3.Connection, *, since: str | None = None, months: int | None = None,
            limit: int | None = None, newest_first: bool = False, shuffle: bool = False,
-           rng: random.Random | None = None,
+           rng: random.Random | None = None, username: str | None = None,
            client: ChessComClient | None = None, log: Log = print) -> IngestStats:
     """Fetch archives and store every qualifying blitz game not already present.
 
@@ -200,7 +201,8 @@ def ingest(con: sqlite3.Connection, *, since: str | None = None, months: int | N
       order, so `limit` yields a sample spread across the whole window rather than
       the N most recent games. `rng` exists so tests can seed the shuffle.
     """
-    client = client or ChessComClient()
+    username = username or config.username()
+    client = client or ChessComClient(username)
     stats = IngestStats()
     if since is None and months is None:
         months = config.DEFAULT_MONTHS
@@ -224,7 +226,7 @@ def ingest(con: sqlite3.Connection, *, since: str | None = None, months: int | N
     for games in batches:
         for g in games:
             stats.fetched += 1
-            if _try_insert(con, g, stats) and limit and stats.inserted >= limit:
+            if _try_insert(con, g, stats, username) and limit and stats.inserted >= limit:
                 log(f"[ingest] {stats.summary()}")
                 return stats
     log(f"[ingest] {stats.summary()}")

@@ -1,7 +1,7 @@
 """Every threshold, depth, path and constant the pipeline uses (SPEC.md §2, §4).
 
-Nothing numeric is hardcoded anywhere else in pipeline/. Bucket B may import this
-module for the thresholds it shows in explanations, so keep it dependency-light.
+Nothing numeric is hardcoded anywhere else in pipeline/. app/ may import this module
+for the thresholds it shows in explanations, so keep it dependency-light.
 """
 from __future__ import annotations
 
@@ -19,12 +19,22 @@ FIXTURE_DB = ROOT / "data" / "fixture.db"
 
 
 def db_path() -> Path:
-    """Both buckets read TUTOR_DB (SPEC.md §6 rule 4)."""
+    """Both pipeline/ and app/ read TUTOR_DB (SPEC.md §6)."""
     return Path(os.environ.get("TUTOR_DB", DEFAULT_DB))
 
 
 # --------------------------------------------------------------------------- player / API
-USERNAME = "Reitsy"                       # display name; matched case-insensitively
+
+
+def username() -> str:
+    """The Chess.com account to mine, from CHESSCOM_USER. Matched case-insensitively."""
+    u = os.environ.get("CHESSCOM_USER", "").strip()
+    if not u:
+        raise RuntimeError(
+            "Set CHESSCOM_USER to your Chess.com username (needed by `ingest` and `fixture`).")
+    return u
+
+
 USER_AGENT = "chessefforttutor (github.com/GrahamDerry/chessefforttutor)"
 API_BASE = "https://api.chess.com/pub/player"
 TIME_CLASS = "blitz"                      # v1: blitz only

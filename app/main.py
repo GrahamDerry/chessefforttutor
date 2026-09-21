@@ -1,6 +1,6 @@
 """Chess Effort Tutor — drill API and static app (SPEC.md §5).
 
-Run:  TUTOR_DB=data/fake.db uvicorn app.main:app --reload
+Run:  TUTOR_DB=data/fixture.db uvicorn app.main:app --reload
 """
 from __future__ import annotations
 

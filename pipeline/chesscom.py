@@ -12,8 +12,8 @@ from pipeline import config
 
 
 class ChessComClient:
-    def __init__(self, username: str = config.USERNAME, session: requests.Session | None = None):
-        self.username = username.lower()          # API paths are lowercase
+    def __init__(self, username: str | None = None, session: requests.Session | None = None):
+        self.username = (username or config.username()).lower()   # API paths are lowercase
         self.session = session or requests.Session()
         self.session.headers["User-Agent"] = config.USER_AGENT
 
