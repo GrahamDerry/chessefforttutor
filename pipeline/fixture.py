@@ -1,4 +1,4 @@
-"""A6: build data/fixture.db from a handful of recent games at a reduced depth.
+"""A6: build data/fixture.db from a random handful of games (last N months) at a reduced depth.
 
 Runs ingest -> analyze -> scenarios -> report against a fresh file, ignoring TUTOR_DB.
 """
@@ -25,8 +25,9 @@ def build_fixture(path: Path = config.FIXTURE_DB, *, games: int = config.FIXTURE
         p.unlink(missing_ok=True)
     con = db.connect(path)
     try:
-        log(f"[fixture] {games} most recent {config.TIME_CLASS} games at depth {depth} -> {path}")
-        ingest(con, months=config.DEFAULT_MONTHS, limit=games, newest_first=True, log=log)
+        log(f"[fixture] {games} random {config.TIME_CLASS} games from the last "
+            f"{config.DEFAULT_MONTHS} months at depth {depth} -> {path}")
+        ingest(con, months=config.DEFAULT_MONTHS, limit=games, shuffle=True, log=log)
         with Engine() as engine:
             analyze(con, depth=depth, engine=engine, log=log)
             run_forks(con, depth=min(depth, config.FORK_DEPTH), engine=engine, log=log)

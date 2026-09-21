@@ -5,6 +5,7 @@ Idempotent: a game whose url is already in `games` is skipped. One transaction p
 from __future__ import annotations
 
 import io
+import random
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -166,40 +167,64 @@ def game_exists(con: sqlite3.Connection, url: str) -> bool:
     return con.execute("SELECT 1 FROM games WHERE url = ?", (url,)).fetchone() is not None
 
 
+def _try_insert(con: sqlite3.Connection, g: dict, stats: IngestStats) -> bool:
+    """Filter, parse and store one Chess.com game. True only if a row was inserted."""
+    if not qualifies(g, stats):
+        return False
+    if game_exists(con, g["url"]):
+        stats.skipped_existing += 1
+        return False
+    try:
+        game_row, positions = parse_game(g, stats=stats)
+    except (ValueError, KeyError) as exc:
+        stats.skipped_unparseable += 1
+        stats.errors.append(f"{g.get('url')}: {exc}")
+        return False
+    if game_exists(con, game_row["url"]):   # [Link] tag and JSON url can differ
+        stats.skipped_existing += 1
+        return False
+    insert_game(con, game_row, positions)
+    stats.inserted += 1
+    return True
+
+
 def ingest(con: sqlite3.Connection, *, since: str | None = None, months: int | None = None,
-           limit: int | None = None, newest_first: bool = False,
+           limit: int | None = None, newest_first: bool = False, shuffle: bool = False,
+           rng: random.Random | None = None,
            client: ChessComClient | None = None, log: Log = print) -> IngestStats:
-    """Fetch archives and store every qualifying blitz game not already present."""
+    """Fetch archives and store every qualifying blitz game not already present.
+
+    Two orderings, both honouring `limit` (stop after N *inserted* games):
+    - default: month by month, each month sorted by end_time (newest first if asked);
+    - `shuffle`: fetch every selected month first, then visit the games in random
+      order, so `limit` yields a sample spread across the whole window rather than
+      the N most recent games. `rng` exists so tests can seed the shuffle.
+    """
     client = client or ChessComClient()
     stats = IngestStats()
     if since is None and months is None:
         months = config.DEFAULT_MONTHS
     archives = select_archives(client.archives(), since=since, months=months,
                                newest_first=newest_first)
-    for url in archives:
+
+    def month(url: str) -> list[dict]:
         stats.months += 1
         games = client.month_games(url)
         games.sort(key=lambda g: g.get("end_time", 0), reverse=newest_first)
         log(f"[ingest] {year_month(url)}: {len(games)} games")
+        return games
+
+    if shuffle:
+        pool = [g for url in archives for g in month(url)]
+        (rng or random.Random()).shuffle(pool)
+        batches = [pool]
+    else:
+        batches = (month(url) for url in archives)
+
+    for games in batches:
         for g in games:
             stats.fetched += 1
-            if not qualifies(g, stats):
-                continue
-            if game_exists(con, g["url"]):
-                stats.skipped_existing += 1
-                continue
-            try:
-                game_row, positions = parse_game(g, stats=stats)
-            except (ValueError, KeyError) as exc:
-                stats.skipped_unparseable += 1
-                stats.errors.append(f"{g.get('url')}: {exc}")
-                continue
-            if game_exists(con, game_row["url"]):   # [Link] tag and JSON url can differ
-                stats.skipped_existing += 1
-                continue
-            insert_game(con, game_row, positions)
-            stats.inserted += 1
-            if limit and stats.inserted >= limit:
+            if _try_insert(con, g, stats) and limit and stats.inserted >= limit:
                 log(f"[ingest] {stats.summary()}")
                 return stats
     log(f"[ingest] {stats.summary()}")

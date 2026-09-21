@@ -1,6 +1,6 @@
 """CLI: python -m pipeline <command> (SPEC.md §4).
 
-    ingest    [--since YYYY-MM] [--months N] [--limit N]
+    ingest    [--since YYYY-MM] [--months N] [--limit N] [--shuffle]
     analyze   [--limit N] [--depth D] [--reshallow]
     forks                                   (A3, not implemented yet)
     scenarios
@@ -27,6 +27,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--since", metavar="YYYY-MM", help="first month to fetch (overrides --months)")
     s.add_argument("--months", type=int, metavar="N", help=f"last N months (default {config.DEFAULT_MONTHS})")
     s.add_argument("--limit", type=int, metavar="N", help="stop after inserting N new games")
+    s.add_argument("--shuffle", action="store_true",
+                   help="visit games in random order across the selected months (pairs with --limit)")
 
     s = sub.add_parser("analyze", help="run Stockfish over every unscored game")
     s.add_argument("--limit", type=int, metavar="N", help="analyze at most N games")
@@ -43,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("scenarios", help="regenerate the scenarios table")
     sub.add_parser("report", help="print the tuning report")
 
-    s = sub.add_parser("fixture", help=f"build {config.FIXTURE_DB.name} from a few recent games")
+    s = sub.add_parser("fixture", help=f"build {config.FIXTURE_DB.name} from a few random games in the last {config.DEFAULT_MONTHS} months")
     s.add_argument("--games", type=int, default=config.FIXTURE_GAMES, metavar="N")
     s.add_argument("--depth", type=int, default=config.FIXTURE_DEPTH, metavar="D")
     s.add_argument("--out", default=str(config.FIXTURE_DB), metavar="PATH")
@@ -62,7 +64,8 @@ def main(argv: list[str] | None = None) -> int:
             run_forks(con, depth=args.depth, recompute=args.recompute, limit=args.limit)
         elif args.cmd == "ingest":
             from pipeline.ingest import ingest
-            ingest(con, since=args.since, months=args.months, limit=args.limit)
+            ingest(con, since=args.since, months=args.months, limit=args.limit,
+                   shuffle=args.shuffle)
         elif args.cmd == "analyze":
             from pipeline.analyze import analyze, reshallow
             if args.reshallow:
