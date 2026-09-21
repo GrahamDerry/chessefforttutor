@@ -230,7 +230,7 @@ work already done (games by `url`, analysis by `(fen_key, depth)`).
   scenario counts by kind, and per-phase mean `e_loss`. This is how we tune `config.py`.
 
 ### A6. Fixture — `python -m pipeline fixture`
-- Runs A1–A4 on 5 games at depth 12 and writes `data/fixture.db`. **Do this first**, commit it.
+- Runs A1–A4 on 5 games drawn at random from the last 6 months, at depth 12, and writes `data/fixture.db`. **Do this first**, commit it. Random rather than most-recent so the drill is not dominated by games still fresh in memory.
 
 ### Tests (`tests/test_pipeline.py`)
 - Clock arithmetic incl. increment and tenths; `E()` at 0, ±100, mate; criticality on a

@@ -13,7 +13,7 @@ brew install stockfish          # Bucket A only
 ## Run the pipeline (Bucket A)
 
 ```bash
-python -m pipeline fixture                      # 5 recent games at depth 12 -> data/fixture.db
+python -m pipeline fixture                      # 5 random games from the last 6 months at depth 12 -> data/fixture.db
 python -m pipeline ingest --months 6            # Chess.com archives -> games/positions (idempotent)
 python -m pipeline analyze --workers 3          # Stockfish, depth 18, commit per game, resumable
 python -m pipeline scenarios                    # regenerate scenarios (keeps ids with attempts)

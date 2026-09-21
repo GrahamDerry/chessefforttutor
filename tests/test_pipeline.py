@@ -120,6 +120,7 @@ def test_percentile_and_archive_selection():
 
 
 # --------------------------------------------------------------------------- ingest (offline, Chess.com-shaped)
+SHUFFLE_SEED = 0   # chosen so the seeded sample spans both months (see test)
 CHESSCOM_GAME = {
     "url": "https://www.chess.com/game/live/1", "time_class": "blitz", "time_control": "180+2",
     "rules": "chess", "end_time": 1789000000,
@@ -170,6 +171,72 @@ def test_ingest_into_db_is_idempotent(tmp_path):
     s2 = ingest(con, months=1, client=FakeClient(), log=lambda m: None)
     assert s2.inserted == 0 and s2.skipped_existing == 1
     assert con.execute("SELECT COUNT(*) FROM positions").fetchone()[0] == 4
+
+
+def _two_month_pool():
+    """Six qualifying games, three per month, oldest -> newest by end_time and UTCDate."""
+    games = []
+    for i, (month, day) in enumerate([("08", "05"), ("08", "15"), ("08", "25"),
+                                      ("09", "05"), ("09", "15"), ("09", "25")]):
+        games.append(dict(
+            CHESSCOM_GAME,
+            url=f"https://www.chess.com/game/live/{100 + i}",
+            end_time=CHESSCOM_GAME["end_time"] + i,
+            pgn=CHESSCOM_GAME["pgn"]
+                .replace('[UTCDate "2026.09.01"]', f'[UTCDate "2026.{month}.{day}"]')
+                .replace('[Link "https://www.chess.com/game/live/1"]',
+                         f'[Link "https://www.chess.com/game/live/{100 + i}"]'),
+        ))
+    return games
+
+
+class _TwoMonthClient:
+    def __init__(self):
+        self.games = _two_month_pool()
+        self.requested: list[str] = []
+
+    def archives(self):
+        return [f"https://api.chess.com/pub/player/reitsy/games/2026/{m}" for m in ("08", "09")]
+
+    def month_games(self, url):
+        self.requested.append(url)
+        return [g for g in self.games if g["pgn"].find(f'[UTCDate "2026.{url[-2:]}.') >= 0]
+
+
+def test_ingest_shuffle_samples_across_months(tmp_path):
+    import random
+    from pipeline import db
+    from pipeline.ingest import ingest
+
+    client = _TwoMonthClient()
+    con = db.connect(tmp_path / "t.db")
+    stats = ingest(con, months=2, limit=3, shuffle=True, rng=random.Random(SHUFFLE_SEED),
+                   client=client, log=lambda m: None)
+    assert stats.inserted == 3 and stats.months == 2
+    assert len(client.requested) == 2, "every month is fetched before any game is picked"
+    urls = {r[0] for r in con.execute("SELECT url FROM games")}
+    assert len(urls) == 3
+    all_urls = [g["url"] for g in client.games]
+    assert urls != set(all_urls[-3:]), "not simply the newest three"
+    assert urls != set(all_urls[:3]), "not simply the oldest three"
+    months = {r[0][:7] for r in con.execute("SELECT played_at FROM games")}
+    assert months == {"2026-08", "2026-09"}
+
+
+def test_ingest_shuffle_skips_existing(tmp_path):
+    import random
+    from pipeline import db
+    from pipeline.ingest import ingest
+
+    client = _TwoMonthClient()
+    con = db.connect(tmp_path / "t.db")
+    ingest(con, months=1, limit=1, client=client, log=lambda m: None)   # one game already there
+    assert con.execute("SELECT COUNT(*) FROM games").fetchone()[0] == 1
+    stats = ingest(con, months=2, limit=5, shuffle=True, rng=random.Random(1),
+                   client=client, log=lambda m: None)
+    assert stats.inserted == 5 and stats.skipped_existing == 1
+    assert con.execute("SELECT COUNT(*) FROM games").fetchone()[0] == 6
+    assert con.execute("SELECT COUNT(DISTINCT url) FROM games").fetchone()[0] == 6
 
 
 # --------------------------------------------------------------------------- scoring (e_played from next ply)
