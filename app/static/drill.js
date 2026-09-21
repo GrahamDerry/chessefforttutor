@@ -2,24 +2,110 @@ import { renderBoard, fmtClock } from '/static/board.js';
 
 const el = id => document.getElementById(id);
 const seen = [];                 // scenario ids this session, so we don't repeat
+const REPLAY_MS = 1000;          // pause per half-move while replaying the lead-in
 let current = null, shownAt = 0, answered = false;
 let done = 0, right = 0;
+// Lead-in replay state. `replayToken` invalidates timers from a skipped or superseded replay.
+let replaying = false, replayTimer = null, replayToken = 0, timerStarted = false;
 
 async function load() {
   answered = false;
+  timerStarted = false;
+  stopReplay();
   el('reveal').classList.add('hidden');
-  setButtons(true);
+  el('replay').classList.add('hidden');
+  el('moves').textContent = '';
+  setButtons(false);
   const q = seen.length ? `?exclude=${seen.slice(-40).join(',')}` : '';
   const res = await fetch(`/api/drill/next${q}`);
   if (!res.ok) {
     el('sub').textContent = (await res.json()).detail || 'No positions available.';
-    setButtons(false);
     return;
   }
   current = await res.json();
   seen.push(current.scenario_id);
+  playHistory();
+}
 
-  renderBoard(el('board'), current.fen, current.user_color);
+// ---------------------------------------------------------------- lead-in replay
+
+const squares = uci => uci ? [uci.slice(0, 2), uci.slice(2, 4)] : [];
+
+// "12. Nf3 Bb4 13. O-O" for the plies played so far; the latest move is emphasised.
+function moveList(upto) {
+  const hist = current.history;
+  const parts = [];
+  for (let i = 0; i < upto; i++) {
+    const h = hist[i];
+    const white = h.ply % 2 === 1;
+    if (white) parts.push(`${(h.ply + 1) / 2}.`);
+    else if (i === 0) parts.push(`${h.ply / 2}...`);
+    parts.push(i === upto - 1 ? `<span class="cur">${h.san}</span>` : h.san);
+  }
+  return parts.join(' ');
+}
+
+// Draw frame `i`: the position before history[i] (or the drill position when i === n),
+// highlighting the move that produced it.
+function frame(i) {
+  const hist = current.history;
+  const fen = i < hist.length ? hist[i].fen : current.fen;
+  const last = i > 0 ? squares(hist[i - 1].uci) : [];
+  renderBoard(el('board'), fen, current.user_color, last);
+  el('moves').innerHTML = moveList(i);
+}
+
+function playHistory() {
+  const hist = current.history || [];
+  if (!hist.length) { frame(0); landed(); return; }
+
+  replaying = true;
+  const token = ++replayToken;
+  setButtons(false);
+  el('board').classList.add('replaying');
+  el('replay').classList.add('hidden');
+  el('clock').textContent = '--:--';
+  el('tomove').textContent = '';
+  const n = hist.length;
+  el('sub').textContent =
+    `Replaying the last ${n} half-move${n === 1 ? '' : 's'}… press any key to skip.`;
+
+  let i = 0;
+  const step = () => {
+    if (token !== replayToken) return;
+    frame(i);
+    if (i === n) { landed(); return; }
+    i++;
+    replayTimer = setTimeout(step, REPLAY_MS);
+  };
+  step();
+}
+
+function stopReplay() {
+  replayToken++;
+  clearTimeout(replayTimer);
+  replayTimer = null;
+  replaying = false;
+  el('board').classList.remove('replaying');
+}
+
+function skipReplay() {
+  if (!replaying) return;
+  stopReplay();
+  frame(current.history.length);
+  landed();
+}
+
+function replayAgain() {
+  if (!current || replaying) return;
+  playHistory();
+}
+
+// The drill position is on the board: show the clock and start the response timer.
+function landed() {
+  stopReplay();
+  setButtons(!answered);
+  el('replay').classList.toggle('hidden', !(current.history || []).length);
   el('clock').textContent = fmtClock(current.clock_before);
   const yourMove = current.side_to_move === current.user_color;
   el('tomove').innerHTML =
@@ -28,7 +114,7 @@ async function load() {
   const tc = current.increment
     ? `${current.base_seconds / 60}|${current.increment}` : `${current.base_seconds / 60}|0`;
   el('sub').textContent = `You are ${current.user_color}. ${tc} blitz. This is the clock you had.`;
-  shownAt = performance.now();
+  if (!timerStarted) { shownAt = performance.now(); timerStarted = true; }
 }
 
 function setButtons(on) {
@@ -37,7 +123,7 @@ function setButtons(on) {
 }
 
 async function answer(choice) {
-  if (answered || !current) return;
+  if (answered || !current || replaying) return;
   answered = true;
   setButtons(false);
   const res = await fetch('/api/drill/answer', {
@@ -104,11 +190,16 @@ function reveal(r) {
 el('btn-long').onclick = () => answer('LONG');
 el('btn-short').onclick = () => answer('SHORT');
 el('next').onclick = load;
+el('replay').onclick = replayAgain;
+el('board').onclick = skipReplay;
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (replaying) { e.preventDefault(); skipReplay(); return; }
   const k = e.key.toLowerCase();
   if (!answered && k === 'l') answer('LONG');
   else if (!answered && k === 's') answer('SHORT');
+  else if (k === 'r') replayAgain();
   else if (answered && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); load(); }
 });
 

@@ -21,6 +21,7 @@ from app import db as dbmod
 from app.explain import explain, why_label
 
 STATIC = Path(__file__).resolve().parent / "static"
+HISTORY_PLIES = 5          # half-moves replayed on the board before a drill position
 
 app = FastAPI(title="Chess Effort Tutor")
 
@@ -118,15 +119,24 @@ def drill_next(exclude: str = Query("", description="comma-separated scenario id
     Deliberately minimal: board, whose move, and the clock as it stood. Anything
     that hints at the answer — kind, ground_truth, evals, the result of the game —
     is withheld until the user has committed.
+
+    `history` is the handful of plies leading up to the position so the client can
+    replay them. It is strictly *before* the drilled ply, so it reveals nothing
+    about the move the user went on to play.
     """
     skip = {int(x) for x in exclude.split(",") if x.strip().isdigit()}
     row = _pick(skip)
     if row is None:
         raise HTTPException(404, "No scenarios available. Has the pipeline run?")
     board = chess.Board(row["fen"])
+    history = [
+        {"ply": h["ply"], "fen": h["fen"], "uci": h["move_played"], "san": h["move_san"]}
+        for h in dbmod.get_history(con(), row["game_id"], row["ply"], HISTORY_PLIES)
+    ]
     return {
         "scenario_id": row["scenario_id"],
         "fen": row["fen"],
+        "history": history,
         "user_color": row["user_color"],
         "side_to_move": "white" if board.turn == chess.WHITE else "black",
         "ply": row["ply"],

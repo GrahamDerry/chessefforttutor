@@ -2,7 +2,9 @@
 const GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
 const FILES = 'abcdefgh';
 
-export function renderBoard(el, fen, orientation = 'white') {
+// `highlight` is a list of square names (e.g. ['e2', 'e4']) to mark as the last move.
+export function renderBoard(el, fen, orientation = 'white', highlight = []) {
+  const hl = new Set(highlight);
   const rows = fen.split(' ')[0].split('/');
   const grid = [];
   for (const row of rows) {
@@ -21,7 +23,9 @@ export function renderBoard(el, fen, orientation = 'white') {
       const rank = orientation === 'white' ? 8 - r : r + 1;
       const file = orientation === 'white' ? FILES[f] : FILES[7 - f];
       const sq = document.createElement('div');
-      sq.className = 'sq ' + ((r + f) % 2 === 0 ? 'l' : 'd');
+      const name = file + rank;
+      sq.className = 'sq ' + ((r + f) % 2 === 0 ? 'l' : 'd') + (hl.has(name) ? ' hl' : '');
+      sq.dataset.sq = name;
       const piece = grid[r][f];
       if (piece) {
         const span = document.createElement('span');
