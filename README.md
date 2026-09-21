@@ -13,6 +13,8 @@ whether the engine agrees, what you actually played, and how many seconds you sp
 
 ## What a drill session looks like
 
+![Demo of a drill session](docs/demo.gif)
+
 1. The board is oriented to your colour. The last few half-moves are replayed so you have
    context (press any key to skip). Your clock is shown exactly as it was in the game.
    Nothing else is revealed: no opening name, no opponent, no result.
