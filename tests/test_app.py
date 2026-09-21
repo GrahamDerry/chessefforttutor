@@ -94,6 +94,50 @@ def test_next_serves_both_labels_over_time(client):
     assert truths == {"LONG", "SHORT"}, "drill should mix LONG and SHORT"
 
 
+def seed_second_game(con: sqlite3.Connection, truth: str = "SHORT") -> int:
+    """A second game with one scenario; returns the scenario id."""
+    now = datetime.now(timezone.utc).isoformat()
+    gid = con.execute(
+        """INSERT INTO games (url, played_at, time_class, base_seconds, increment, user_color,
+               result_user, pgn) VALUES (?,?,?,?,?,?,?,?)""",
+        ("https://example.test/2", now, "blitz", 300, 0, "white", 1.0, "[Event \"t\"]"),
+    ).lastrowid
+    fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+    pid = con.execute(
+        """INSERT INTO positions (game_id, ply, fen, user_to_move, phase, move_played,
+               move_san, clock_before, clock_after, seconds_spent, time_fraction,
+               e_best, e_played, e_loss, criticality, obvious, label)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (gid, 2, fen, 1, "opening", "e7e5", "e5", 180.0, 178.0, 2.0, 0.011,
+         0.5, 0.5, 0.0, 0.01, 1, truth),
+    ).lastrowid
+    sid = con.execute(
+        """INSERT INTO scenarios (position_id, kind, ground_truth, severity,
+               notes_json, created_at) VALUES (?,?,?,?,?,?)""",
+        (pid, "calm" if truth == "SHORT" else "blunder", truth, 0.0, "{}", now),
+    ).lastrowid
+    con.commit()
+    return sid
+
+
+def test_next_skips_games_already_seen(client):
+    """Once a scenario from a game has been served, that game's other scenarios
+    are off the table for the rest of the session."""
+    other = seed_second_game(mainmod.con())
+    for _ in range(30):
+        body = client.get(f"/api/drill/next?exclude={client.ids['blunder']}").json()
+        assert body["scenario_id"] == other, "served a second position from a seen game"
+
+
+def test_next_falls_back_when_every_game_is_seen(client):
+    """When every game has been used, unseen scenarios from seen games are
+    served rather than a 404 -- the drill must not run dry."""
+    other = seed_second_game(mainmod.con())
+    r = client.get(f"/api/drill/next?exclude={client.ids['blunder']},{other}")
+    assert r.status_code == 200
+    assert r.json()["scenario_id"] == client.ids["calm"]
+
+
 def test_answer_records_attempt_and_reveals(client):
     sid = client.ids["blunder"]
     r = client.post("/api/drill/answer",

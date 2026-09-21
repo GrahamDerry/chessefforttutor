@@ -84,28 +84,40 @@ def _best_line(row: sqlite3.Row) -> tuple[str | None, list[str]]:
 
 
 def _pick(exclude: set[int]) -> sqlite3.Row | None:
-    """A scenario the user has not just seen, balanced LONG/SHORT.
+    """A scenario the user has not just seen, balanced LONG/SHORT, one per game.
 
     Coin-flip the target label first so the drill stays ~50:50 regardless of how
     the underlying scenario mix is skewed; within a label, prefer positions the
     user has never attempted, then least-attempted.
+
+    `exclude` is the scenario ids served so far this session. A game contributes
+    several scenarios, so any game one of those ids belongs to is skipped too:
+    the user should see each game at most once per session. Only when every game
+    has been used does the picker relax to plain scenario-id exclusion, so the
+    drill never runs dry.
     """
+    rows = con().execute(
+        """SELECT s.id, s.ground_truth, p.game_id,
+                  (SELECT COUNT(*) FROM drill_attempts d WHERE d.scenario_id = s.id) AS seen
+             FROM scenarios s
+             JOIN positions p ON p.id = s.position_id"""
+    ).fetchall()
+    seen_games = {r["game_id"] for r in rows if r["id"] in exclude}
     order = ["LONG", "SHORT"]
     random.shuffle(order)
-    for target in order:
-        rows = con().execute(
-            """SELECT s.id,
-                      (SELECT COUNT(*) FROM drill_attempts d WHERE d.scenario_id = s.id) AS seen
-                 FROM scenarios s
-                WHERE s.ground_truth = ?""",
-            (target,),
-        ).fetchall()
-        pool = [r for r in rows if r["id"] not in exclude]
-        if not pool:
-            continue
-        fewest = min(r["seen"] for r in pool)
-        candidates = [r["id"] for r in pool if r["seen"] == fewest]
-        return dbmod.get_scenario(con(), random.choice(candidates))
+    for strict in (True, False):
+        for target in order:
+            pool = [
+                r for r in rows
+                if r["ground_truth"] == target
+                and r["id"] not in exclude
+                and not (strict and r["game_id"] in seen_games)
+            ]
+            if not pool:
+                continue
+            fewest = min(r["seen"] for r in pool)
+            candidates = [r["id"] for r in pool if r["seen"] == fewest]
+            return dbmod.get_scenario(con(), random.choice(candidates))
     return None
 
 
