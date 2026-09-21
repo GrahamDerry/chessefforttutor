@@ -41,7 +41,7 @@ SCENARIO_JOIN = """
   SELECT s.id           AS scenario_id,
          s.kind, s.ground_truth, s.severity, s.notes_json,
          p.id           AS position_id,
-         p.fen, p.ply, p.phase, p.move_san, p.move_played,
+         p.game_id, p.fen, p.ply, p.phase, p.move_san, p.move_played,
          p.clock_before, p.clock_after, p.seconds_spent, p.time_fraction,
          p.e_best, p.e_played, p.e_loss, p.criticality, p.obvious, p.commitment, p.label,
          g.url AS game_url, g.user_color, g.base_seconds, g.increment,
@@ -56,3 +56,20 @@ SCENARIO_JOIN = """
 
 def get_scenario(con: sqlite3.Connection, scenario_id: int) -> sqlite3.Row | None:
     return con.execute(SCENARIO_JOIN + " WHERE s.id = ?", (scenario_id,)).fetchone()
+
+
+def get_history(con: sqlite3.Connection, game_id: int, ply: int,
+                limit: int = 5) -> list[sqlite3.Row]:
+    """The last `limit` plies of a game strictly before `ply`, in ascending order.
+
+    Each row's `fen` is the position *before* `move_played`, so replaying the rows in
+    order walks the board up to the position at `ply`.
+    """
+    rows = con.execute(
+        """SELECT ply, fen, move_played, move_san
+             FROM positions
+            WHERE game_id = ? AND ply < ?
+            ORDER BY ply DESC LIMIT ?""",
+        (game_id, ply, limit),
+    ).fetchall()
+    return rows[::-1]

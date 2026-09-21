@@ -24,6 +24,8 @@ main { max-width: 1000px; margin: 0 auto; padding: 24px 20px 60px; }
 .sq { display: flex; align-items: center; justify-content: center;
   font-size: min(7.5vw, 42px); line-height: 1; position: relative; }
 .sq.l { background: var(--light); } .sq.d { background: var(--dark); }
+.sq.hl.l { background: #f6f669; } .sq.hl.d { background: #baca2b; }
+.board.replaying { cursor: pointer; }
 .sq .p {
   text-shadow:
      1px  0   0 var(--outline), -1px  0   0 var(--outline),
@@ -42,7 +44,17 @@ main { max-width: 1000px; margin: 0 auto; padding: 24px 20px 60px; }
 .clock { font-variant-numeric: tabular-nums; font-size: 20px; color: var(--ink);
   background: var(--panel); border: 1px solid var(--line); border-radius: 5px;
   padding: 3px 10px; }
-.tomove { display: inline-flex; align-items: center; gap: 6px; }
+.tomove { display: inline-flex; align-items: center; gap: 6px; flex: 1; }
+button.replay { background: var(--panel); color: var(--dim); border: 1px solid var(--line);
+  border-radius: 5px; padding: 3px 9px; font: inherit; font-size: 12px; cursor: pointer;
+  margin-right: 10px; }
+button.replay:hover { color: var(--ink); border-color: var(--accent); }
+button.replay.hidden { display: none; }
+button.replay kbd { background: #2c2c34; border: 1px solid var(--line); border-radius: 4px;
+  padding: 0 5px; font-size: 10px; margin-left: 4px; }
+.moves { margin-top: 8px; min-height: 1.5em; color: var(--dim); font-size: 13px;
+  font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.moves .cur { color: var(--ink); font-weight: 600; }
 .dot { width: 10px; height: 10px; border-radius: 50%; border: 1px solid #666; }
 .dot.white { background: #fff; } .dot.black { background: #222; }
 

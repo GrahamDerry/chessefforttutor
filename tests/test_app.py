@@ -178,3 +178,29 @@ def test_explanation_has_no_double_spaces():
            "seconds_spent": 17.4, "time_fraction": 0.14, "e_loss": 0.02,
            "move_san": "Kg2", "kind": "too_much"}
     assert "  " not in explain(row)
+
+
+def test_next_history_is_the_plies_before_the_position(client):
+    """The lead-in replay gets the plies strictly before the drilled one, oldest first."""
+    con = mainmod.con()
+    pid = con.execute("SELECT id FROM positions WHERE ply = 3").fetchone()[0]
+    now = datetime.now(timezone.utc).isoformat()
+    sid = con.execute(
+        """INSERT INTO scenarios (position_id, kind, ground_truth, severity, notes_json, created_at)
+           VALUES (?,?,?,?,?,?)""", (pid, "blunder", "LONG", 0.3, "{}", now)).lastrowid
+    con.commit()
+    others = ",".join(str(i) for i in client.ids.values())
+    body = client.get(f"/api/drill/next?exclude={others}").json()
+    assert body["scenario_id"] == sid and body["ply"] == 3
+    assert LEAKY.isdisjoint(body)
+    assert [h["ply"] for h in body["history"]] == [1, 2]
+    for h in body["history"]:
+        assert set(h) == {"ply", "fen", "uci", "san"}
+        assert h["ply"] < body["ply"]
+        assert h["uci"] == "e2e4" and h["san"] == "e4"
+
+
+def test_next_history_is_empty_at_the_first_ply(client):
+    body = client.get(f"/api/drill/next?exclude={client.ids['calm']}").json()
+    assert body["scenario_id"] == client.ids["blunder"] and body["ply"] == 1
+    assert body["history"] == []
